@@ -48,7 +48,7 @@ tun-proxy --version
 ```
 
 输出包含版本号、Commit 和构建时间。`make build` 生成的开发版本号为 `local`；
-`make build-release` 会从当前 annotated SemVer tag 注入发布版本号。
+`make build-release` 会先运行 `golangci-lint`，再从当前 annotated SemVer tag 注入发布版本号。
 
 ## 全局帮助
 

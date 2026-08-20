@@ -39,8 +39,9 @@ make help
 | `make test` | 运行单元测试 |
 | `make test-race` | 运行竞态测试 |
 | `make vet` | 运行 `go vet` |
+| `make lint` | 使用仓库中的 `.golangci.yml` 运行 `golangci-lint` |
 | `make fmt` | 格式化 Go 源码 |
-| `make check` | 依次执行格式检查、测试和 `go vet` |
+| `make check` | 依次执行格式检查、测试、`go vet` 和 `golangci-lint` |
 | `make install` | 先执行 `build-release`，再安装发布版 CLI 和用户配置 |
 | `make system-proxy-check` | 只读检查 tun-proxy 是否仍在接管系统网络 |
 | `make system-proxy-clean` | 停止服务并恢复已记录的 DNS 和路由状态 |
@@ -52,12 +53,21 @@ Makefile 主要提供源码开发、检查和编译目标；`make install` 是�
 
 ## 3. 下载依赖并检查源码
 
-安装前运行：
+安装前先安装 `golangci-lint` v2，例如在 macOS 上使用 Homebrew：
+
+```sh
+brew install golangci-lint
+```
+
+然后下载依赖并执行检查：
 
 ```sh
 make deps
 make check
 ```
+
+`make lint` 会读取仓库根目录的 `.golangci.yml`；配置启用了 `errcheck`、`govet`、
+`ineffassign`、`staticcheck` 和 `unused`，并完整输出每个 linter 的问题。
 
 竞态测试耗时更长，建议在发布或重要变更后额外执行：
 
@@ -89,7 +99,7 @@ make build
 `--version` 都可以查看版本信息；本地构建的 Commit 和构建时间显示为 `unknown`，
 不影响运行行为。
 
-在当前 `HEAD` 已打 annotated SemVer tag（例如 `v1.2.3`）时，可以构建发布版本：
+在当前 `HEAD` 已打 annotated SemVer tag（例如 `v1.2.3`）时，可以构建发布版本。构建前会先执行 `make lint`：
 
 ```sh
 make build-release

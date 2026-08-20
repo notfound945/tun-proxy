@@ -2,6 +2,7 @@ SHELL := /bin/sh
 
 GO ?= go
 GOFMT ?= gofmt
+GOLANGCI_LINT ?= golangci-lint
 INSTALL ?= install
 SUDO ?= sudo
 
@@ -16,7 +17,7 @@ SYSTEM_BINARY := $(BINDIR)/tun-proxy
 GO_FILES := $(shell find cmd internal -type f -name '*.go' -print)
 
 .DEFAULT_GOAL := build
-.PHONY: all build build-release clean deps test test-race vet fmt fmt-check check help install system-proxy-check system-proxy-clean
+.PHONY: all build build-release clean deps test test-race vet lint fmt fmt-check check help install system-proxy-check system-proxy-clean
 
 all: build
 
@@ -27,8 +28,9 @@ help:
 	@echo '  make test             运行单元测试'
 	@echo '  make test-race        运行竞态测试'
 	@echo '  make vet              运行 go vet'
+	@echo '  make lint             运行 golangci-lint'
 	@echo '  make fmt              格式化 Go 源码'
-	@echo '  make check            运行格式、测试和 vet 检查'
+	@echo '  make check            运行格式、测试、vet 和 lint 检查'
 	@echo '  make install          构建并安装当前 tag 的 release 版本（请勿使用 sudo make）'
 	@echo '  make system-proxy-check  只读检查 tun-proxy 是否仍在接管系统网络'
 	@echo '  make system-proxy-clean  停止服务并恢复已记录的 DNS/路由状态'
@@ -41,7 +43,7 @@ build:
 	mkdir -p "$(BUILD_DIR)"
 	$(GO) build -trimpath -ldflags "-X main.version=local" -o "$(BINARY)" ./cmd/tun-proxy
 
-build-release:
+build-release: lint
 	GO="$(GO)" ./scripts/build-release.sh "$(BINARY)"
 
 test:
@@ -52,6 +54,13 @@ test-race:
 
 vet:
 	$(GO) vet ./...
+
+lint:
+	@command -v "$(GOLANGCI_LINT)" >/dev/null 2>&1 || { \
+		echo '错误: 未找到 golangci-lint，请先安装 golangci-lint v2。' >&2; \
+		exit 1; \
+	}
+	$(GOLANGCI_LINT) run
 
 fmt:
 	$(GOFMT) -w $(GO_FILES)
@@ -64,7 +73,7 @@ fmt-check:
 		exit 1; \
 	fi
 
-check: fmt-check test vet
+check: fmt-check test vet lint
 
 install:
 	@if [ "$$(id -u)" -eq 0 ]; then \

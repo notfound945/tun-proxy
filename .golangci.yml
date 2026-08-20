@@ -1,0 +1,49 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      checks:
+        - all
+        # Project errors preserve the product names "Fake IP" and "Fake DNS".
+        - -ST1005
+  exclusions:
+    rules:
+      # Cleanup paths deliberately use best-effort close/remove operations.
+      - linters:
+          - errcheck
+        text: 'Error return value of `.*\.Close` is not checked'
+      - linters:
+          - errcheck
+        text: 'Error return value of `.*\.ActivateAndServe` is not checked'
+      - linters:
+          - errcheck
+        text: 'Error return value of `os\.Remove` is not checked'
+      # These are intentional compatibility/readability choices in existing code.
+      - path: internal/fakedns/server\.go
+        linters:
+          - staticcheck
+        text: 'ST1011:'
+      - path: internal/privsep/supervisor_test\.go
+        linters:
+          - staticcheck
+        text: 'S1016:'
+      - path: internal/status/open_fds_darwin\.go
+        linters:
+          - staticcheck
+        text: 'SA1019:'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
