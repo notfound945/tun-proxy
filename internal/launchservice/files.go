@@ -54,11 +54,11 @@ func inspectSource(path string, maxSize int64) (*os.File, error) {
 	}
 	opened, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("inspect opened source %q: %w", path, err)
 	}
 	if !os.SameFile(info, opened) {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("source %q changed while opening", path)
 	}
 	return file, nil
@@ -69,7 +69,7 @@ func stageCopy(source, target string, mode os.FileMode, maxSize int64) (string, 
 	if err != nil {
 		return "", err
 	}
-	defer sourceFile.Close()
+	defer sourceFile.Close() //nolint:errcheck // Best-effort cleanup.
 	temporary, err := os.CreateTemp(filepath.Dir(target), ".tun-proxy-stage-*")
 	if err != nil {
 		return "", fmt.Errorf("create staged file for %q: %w", target, err)
@@ -291,6 +291,6 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer directory.Close() //nolint:errcheck // Best-effort cleanup.
 	return directory.Sync()
 }

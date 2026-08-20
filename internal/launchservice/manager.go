@@ -414,7 +414,7 @@ func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource 
 	if err != nil {
 		return err
 	}
-	defer os.Remove(binaryStage)
+	defer os.Remove(binaryStage) //nolint:errcheck // Best-effort staging cleanup.
 	type stagedTarget struct{ stage, target string }
 	staged := []stagedTarget{{binaryStage, manager.Layout.Binary}}
 	if configSource != "" {
@@ -422,7 +422,7 @@ func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource 
 		if err != nil {
 			return err
 		}
-		defer os.Remove(configStage)
+		defer os.Remove(configStage) //nolint:errcheck // Best-effort staging cleanup.
 		staged = append(staged, stagedTarget{configStage, manager.Layout.Config})
 	}
 	manifest, err := Manifest(manager.Layout)
@@ -433,7 +433,7 @@ func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource 
 	if err != nil {
 		return err
 	}
-	defer os.Remove(plistStage)
+	defer os.Remove(plistStage) //nolint:errcheck // Best-effort staging cleanup.
 	staged = append(staged, stagedTarget{plistStage, manager.Layout.Plist})
 	if before.Running || before.Phase != "" {
 		if err := manager.Stop(ctx); err != nil {

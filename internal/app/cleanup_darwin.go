@@ -44,7 +44,7 @@ func CleanupWithStatusOwners(ctx context.Context, statePath, fallbackLockPath st
 		return fmt.Errorf("inspect recorded instance lock: %w", lockErr)
 	}
 	if staleLock != nil {
-		defer staleLock.Close()
+		defer staleLock.Close() //nolint:errcheck // Best-effort cleanup.
 	} else if err := unix.Kill(state.PID, 0); err == nil || errors.Is(err, unix.EPERM) {
 		return fmt.Errorf("refuse cleanup: recorded process %d may still be running and its lock is missing", state.PID)
 	} else if !errors.Is(err, unix.ESRCH) {

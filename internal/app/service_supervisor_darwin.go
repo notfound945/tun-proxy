@@ -407,7 +407,7 @@ func loadManagedServiceConfigForOwner(path string, layout launchservice.Layout, 
 		return nil, nil, "", fmt.Errorf("open managed config %q: %w", path, err)
 	}
 	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // Best-effort cleanup.
 	info, err := file.Stat()
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("inspect managed config %q: %w", path, err)

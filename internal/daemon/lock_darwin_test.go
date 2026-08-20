@@ -69,7 +69,7 @@ func TestRemoveStaleRefusesHeldLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
+	defer lock.Close() //nolint:errcheck // Best-effort cleanup.
 	if err := RemoveStale(path, os.Getpid()); err == nil {
 		t.Fatal("RemoveStale removed a held lock")
 	}
@@ -98,7 +98,7 @@ func TestProbeLockTreatsUnlockedLivePIDAsStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer claim.Close()
+	defer claim.Close() //nolint:errcheck // Best-effort cleanup.
 	if _, err := TryClaimStale(path, os.Getpid()); !errors.Is(err, ErrLockHeld) {
 		t.Fatalf("second stale claim error = %v, want held", err)
 	}

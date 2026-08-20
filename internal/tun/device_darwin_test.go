@@ -75,7 +75,7 @@ func TestOpenFileWrapsDeviceWithoutConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writeFile.Close()
+	defer writeFile.Close() //nolint:errcheck // Best-effort cleanup.
 	native := newFakeNativeDevice("utun12")
 	device, err := openFileWithFactory(readFile, func(file *os.File, mtu int) (wgtun.Device, error) {
 		if file != readFile {
@@ -102,7 +102,7 @@ func TestOpenFileClosesDescriptorWhenFactoryFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writeFile.Close()
+	defer writeFile.Close() //nolint:errcheck // Best-effort cleanup.
 	_, err = openFileWithFactory(readFile, func(*os.File, int) (wgtun.Device, error) {
 		return nil, errors.New("route socket denied")
 	})
@@ -119,7 +119,7 @@ func TestOpenFileClosesNativeWhenNameFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writeFile.Close()
+	defer writeFile.Close() //nolint:errcheck // Best-effort cleanup.
 	native := newFakeNativeDevice("")
 	device, err := openFileWithFactory(readFile, func(*os.File, int) (wgtun.Device, error) {
 		return &nameFailingDevice{fakeNativeDevice: native}, nil

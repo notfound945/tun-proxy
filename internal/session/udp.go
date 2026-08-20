@@ -209,7 +209,7 @@ func (udpSession *UDP) Handle(ctx context.Context, flow netstack.UDPFlow, client
 		return fmt.Errorf("rule %d outbound %q for UDP %s: %w", decision.RuleID, decision.Outbound, domain, err)
 	}
 	udpSession.metrics.datagramsToNetwork.Add(1)
-	defer upstream.Close()
+	defer upstream.Close() //nolint:errcheck // Best-effort cleanup.
 
 	err = relayUDP(ctx, client, upstream, udpSession.config.IdleTimeout, &udpSession.metrics)
 	if errors.Is(err, ErrUDPIdleTimeout) {

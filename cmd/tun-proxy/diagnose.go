@@ -293,7 +293,7 @@ func scanHostsConflicts(path string, configRules []config.Rule) ([]hostsConflict
 	if err != nil {
 		return nil, fmt.Errorf("open hosts file %q: %w", path, err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // Best-effort cleanup.
 	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("inspect hosts file %q: %w", path, err)

@@ -57,8 +57,8 @@ func (runtime *fakeWorkerRuntime) Done() <-chan error { return runtime.runtimeDo
 
 func TestServeWorkerStartupReloadAndShutdown(t *testing.T) {
 	supervisorConnection, workerConnection := net.Pipe()
-	defer supervisorConnection.Close()
-	defer workerConnection.Close()
+	defer supervisorConnection.Close() //nolint:errcheck // Best-effort cleanup.
+	defer workerConnection.Close()     //nolint:errcheck // Best-effort cleanup.
 	runtime := newFakeWorkerRuntime()
 	workerDone := make(chan error, 1)
 	go func() { workerDone <- ServeWorker(context.Background(), workerConnection, runtime) }()
@@ -109,8 +109,8 @@ func TestServeWorkerStartupReloadAndShutdown(t *testing.T) {
 
 func TestServeWorkerReportsPrepareFailure(t *testing.T) {
 	supervisorConnection, workerConnection := net.Pipe()
-	defer supervisorConnection.Close()
-	defer workerConnection.Close()
+	defer supervisorConnection.Close() //nolint:errcheck // Best-effort cleanup.
+	defer workerConnection.Close()     //nolint:errcheck // Best-effort cleanup.
 	runtime := newFakeWorkerRuntime()
 	runtime.prepareErr = fmt.Errorf("broken graph")
 	workerDone := make(chan error, 1)

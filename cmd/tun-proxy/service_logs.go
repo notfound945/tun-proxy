@@ -92,7 +92,7 @@ func tailManagedLog(path string, lines int) ([]byte, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // Best-effort cleanup.
 	if lines == 0 || info.Size() == 0 {
 		return nil, info, nil
 	}
@@ -130,11 +130,11 @@ func openManagedLog(path string) (*os.File, os.FileInfo, error) {
 	}
 	after, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, nil, fmt.Errorf("inspect opened managed log %q: %w", path, err)
 	}
 	if !os.SameFile(before, after) {
-		file.Close()
+		_ = file.Close()
 		return nil, nil, fmt.Errorf("managed log %q changed while opening", path)
 	}
 	return file, after, nil
@@ -188,15 +188,15 @@ func followManagedLogs(ctx context.Context, logs []followedLog) error {
 				}
 				if info.Size() == log.Offset {
 					log.Info = info
-					file.Close()
+					_ = file.Close()
 					continue
 				}
 				if _, err := file.Seek(log.Offset, io.SeekStart); err != nil {
-					file.Close()
+					_ = file.Close()
 					return fmt.Errorf("seek managed log %q: %w", log.Path, err)
 				}
 				contents, err := io.ReadAll(file)
-				file.Close()
+				_ = file.Close()
 				if err != nil {
 					return fmt.Errorf("follow managed log %q: %w", log.Path, err)
 				}

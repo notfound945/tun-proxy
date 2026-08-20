@@ -13,23 +13,23 @@ func TestPrepareHandoffAndWorkerCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tunFile.Close()
+	defer tunFile.Close() //nolint:errcheck // Best-effort cleanup.
 	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer udp.Close()
+	defer udp.Close() //nolint:errcheck // Best-effort cleanup.
 	tcp, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tcp.Close()
+	defer tcp.Close() //nolint:errcheck // Best-effort cleanup.
 
 	handoff, err := PrepareHandoff(tunFile, udp, tcp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer handoff.Close()
+	defer handoff.Close() //nolint:errcheck // Best-effort cleanup.
 	files := handoff.ExtraFiles()
 	if len(files) != 4 || files[1] != tunFile {
 		t.Fatalf("handoff files = %v", files)

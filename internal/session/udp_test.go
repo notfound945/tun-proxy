@@ -33,7 +33,7 @@ func TestUDPHandleRelaysFirstDatagramAndExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 	upstream, server := net.Pipe()
-	defer server.Close()
+	defer server.Close() //nolint:errcheck // Best-effort cleanup.
 	packetDialer := &fakePacketDialer{results: []dialResult{{conn: upstream}}}
 	udpSession, err := NewUDP(pool, matcher, map[string]Route{
 		"primary": {
@@ -46,7 +46,7 @@ func TestUDPHandleRelaysFirstDatagramAndExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, application := net.Pipe()
-	defer application.Close()
+	defer application.Close() //nolint:errcheck // Best-effort cleanup.
 	requests := [][]byte{[]byte("first UDP request"), []byte("second UDP request")}
 	responses := [][]byte{[]byte("first UDP response"), []byte("second UDP response")}
 	serverDone := make(chan error, 1)
@@ -115,7 +115,7 @@ func TestUDPConnectFallsBackAfterRecoverableResolverFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	upstream, server := net.Pipe()
-	defer server.Close()
+	defer server.Close() //nolint:errcheck // Best-effort cleanup.
 	fallbackDialer := &fakePacketDialer{results: []dialResult{{conn: upstream}}}
 	udpSession, err := NewUDP(&fakePool{domain: "example.com"}, matcher, map[string]Route{
 		"primary": {
@@ -140,7 +140,7 @@ func TestUDPConnectFallsBackAfterRecoverableResolverFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if err := <-readDone; err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestUDPConnectIPv6UsesAAAAAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	upstream, server := net.Pipe()
-	defer server.Close()
+	defer server.Close() //nolint:errcheck // Best-effort cleanup.
 	dialer := &fakePacketDialer{results: []dialResult{{conn: upstream}}}
 	resolver := &fakeResolver{ipv6Addresses: []netip.Addr{netip.MustParseAddr("2001:db8::53")}}
 	udpSession, err := NewUDP(&fakePool{domain: "example.com"}, matcher, map[string]Route{
@@ -174,7 +174,7 @@ func TestUDPConnectIPv6UsesAAAAAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if err := <-readDone; err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestUDPConnectLiteralSkipsResolver(t *testing.T) {
 		t.Fatal(err)
 	}
 	upstream, server := net.Pipe()
-	defer server.Close()
+	defer server.Close() //nolint:errcheck // Best-effort cleanup.
 	dialer := &fakePacketDialer{results: []dialResult{{conn: upstream}}}
 	resolver := &fakeResolver{err: errors.New("must not resolve a literal")}
 	udpSession, err := NewUDP(&fakePool{domain: "example.com"}, matcher, map[string]Route{
@@ -209,7 +209,7 @@ func TestUDPConnectLiteralSkipsResolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if err := <-readDone; err != nil {
 		t.Fatal(err)
 	}

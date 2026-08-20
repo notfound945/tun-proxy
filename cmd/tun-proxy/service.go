@@ -346,7 +346,7 @@ func serviceWorkerCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer resources.Close()
+	defer resources.Close() //nolint:errcheck // Best-effort cleanup.
 	worker, err := app.NewServiceWorker(resources)
 	if err != nil {
 		return err

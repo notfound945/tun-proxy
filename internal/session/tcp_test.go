@@ -69,7 +69,7 @@ func TestConnectTriesAllAddressesThenRecoverableFallback(t *testing.T) {
 	primaryDialer := &fakeDialer{results: []dialResult{{err: syscall.ENETUNREACH}, {err: context.DeadlineExceeded}}}
 	fallbackResolver := &fakeResolver{addresses: []netip.Addr{netip.MustParseAddr("203.0.113.1")}}
 	connected, peer := net.Pipe()
-	defer peer.Close()
+	defer peer.Close() //nolint:errcheck // Best-effort cleanup.
 	fallbackDialer := &fakeDialer{results: []dialResult{{conn: connected}}}
 	tcpSession := newTestTCP(t, map[string]Route{
 		"primary":  {Name: "primary", Resolver: primaryResolver, Dialer: primaryDialer, Fallback: "fallback"},
@@ -80,7 +80,7 @@ func TestConnectTriesAllAddressesThenRecoverableFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if selected != "fallback" || len(primaryDialer.calls) != 2 || len(fallbackDialer.calls) != 1 {
 		t.Fatalf("selected=%q primary calls=%v fallback calls=%v", selected, primaryDialer.calls, fallbackDialer.calls)
 	}
@@ -122,7 +122,7 @@ func TestConnectDoesNotFallbackOnConnectionRefused(t *testing.T) {
 func TestConnectIPv6UsesAAAAAndTCP6(t *testing.T) {
 	resolver := &fakeResolver{ipv6Addresses: []netip.Addr{netip.MustParseAddr("2001:db8::10")}}
 	connected, peer := net.Pipe()
-	defer peer.Close()
+	defer peer.Close() //nolint:errcheck // Best-effort cleanup.
 	dialer := &fakeDialer{results: []dialResult{{conn: connected}}}
 	tcpSession := newTestTCP(t, map[string]Route{
 		"primary": {Name: "primary", Resolver: resolver, Dialer: dialer},
@@ -131,7 +131,7 @@ func TestConnectIPv6UsesAAAAAndTCP6(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if selected != "primary" || resolver.calls != 0 || resolver.ipv6Calls != 1 {
 		t.Fatalf("selected=%q A calls=%d AAAA calls=%d", selected, resolver.calls, resolver.ipv6Calls)
 	}
@@ -196,7 +196,7 @@ func TestMappingPoolsAllowsLiteralOutsideFakePrefix(t *testing.T) {
 func TestConnectLiteralSkipsResolver(t *testing.T) {
 	resolver := &fakeResolver{err: errors.New("must not resolve a literal")}
 	connected, peer := net.Pipe()
-	defer peer.Close()
+	defer peer.Close() //nolint:errcheck // Best-effort cleanup.
 	dialer := &fakeDialer{results: []dialResult{{conn: connected}}}
 	tcpSession := newTestTCP(t, map[string]Route{
 		"primary": {Name: "primary", Resolver: resolver, Dialer: dialer},
@@ -206,7 +206,7 @@ func TestConnectLiteralSkipsResolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if selected != "primary" || resolver.calls != 0 || len(dialer.calls) != 1 || dialer.calls[0] != netip.MustParseAddrPort("203.0.113.9:443") {
 		t.Fatalf("selected=%q resolver_calls=%d dial_calls=%v", selected, resolver.calls, dialer.calls)
 	}
@@ -225,8 +225,8 @@ func TestHandleRejectReleasesFakeIPReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, peer := net.Pipe()
-	defer client.Close()
-	defer peer.Close()
+	defer client.Close() //nolint:errcheck // Best-effort cleanup.
+	defer peer.Close()   //nolint:errcheck // Best-effort cleanup.
 	err = tcpSession.Handle(t.Context(), testFlow(), client)
 	if !errors.Is(err, outbound.ErrRejected) {
 		t.Fatalf("Handle error = %v", err)

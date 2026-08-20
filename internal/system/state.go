@@ -77,17 +77,17 @@ func WriteState(path string, state State) error {
 	}()
 
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("chmod temporary state file: %w", err)
 	}
 	encoder := json.NewEncoder(temporary)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(state); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("encode state: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("sync state: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
@@ -102,7 +102,7 @@ func WriteState(path string, state State) error {
 	if err != nil {
 		return fmt.Errorf("open state directory for sync: %w", err)
 	}
-	defer dir.Close()
+	defer dir.Close() //nolint:errcheck // Best-effort cleanup.
 	if err := dir.Sync(); err != nil {
 		return fmt.Errorf("sync state directory: %w", err)
 	}
@@ -131,7 +131,7 @@ func ReadState(path string) (State, error) {
 	if err != nil {
 		return State{}, fmt.Errorf("open state file: %w", err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // Best-effort cleanup.
 	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
 	decoder.DisallowUnknownFields()
 	var state State

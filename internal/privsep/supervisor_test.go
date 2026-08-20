@@ -13,8 +13,8 @@ import (
 
 func TestSupervisorSessionProtocolLifecycle(t *testing.T) {
 	supervisorConnection, workerConnection := net.Pipe()
-	defer supervisorConnection.Close()
-	defer workerConnection.Close()
+	defer supervisorConnection.Close() //nolint:errcheck // Best-effort cleanup.
+	defer workerConnection.Close()     //nolint:errcheck // Best-effort cleanup.
 	identity := Identity{UID: 501, GID: 20}
 	processDone := make(chan error, 1)
 	session, err := NewSupervisorSession(supervisorConnection, 99, identity, processDone)
@@ -95,8 +95,8 @@ func TestSupervisorSessionProtocolLifecycle(t *testing.T) {
 
 func TestSupervisorSessionRejectsPreparedIdentityMismatch(t *testing.T) {
 	supervisorConnection, workerConnection := net.Pipe()
-	defer supervisorConnection.Close()
-	defer workerConnection.Close()
+	defer supervisorConnection.Close() //nolint:errcheck // Best-effort cleanup.
+	defer workerConnection.Close()     //nolint:errcheck // Best-effort cleanup.
 	session, err := NewSupervisorSession(supervisorConnection, 99, Identity{UID: 501, GID: 20}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -116,8 +116,8 @@ func TestSupervisorSessionRejectsPreparedIdentityMismatch(t *testing.T) {
 func TestSupervisorSessionReportsWorkerExitAndReloadFailure(t *testing.T) {
 	t.Run("worker exit", func(t *testing.T) {
 		supervisorConnection, workerConnection := net.Pipe()
-		defer supervisorConnection.Close()
-		defer workerConnection.Close()
+		defer supervisorConnection.Close() //nolint:errcheck // Best-effort cleanup.
+		defer workerConnection.Close()     //nolint:errcheck // Best-effort cleanup.
 		processDone := make(chan error, 1)
 		session, err := NewSupervisorSession(supervisorConnection, 99, Identity{UID: 501, GID: 20}, processDone)
 		if err != nil {
@@ -137,8 +137,8 @@ func TestSupervisorSessionReportsWorkerExitAndReloadFailure(t *testing.T) {
 
 	t.Run("reload rejected", func(t *testing.T) {
 		supervisorConnection, workerConnection := net.Pipe()
-		defer supervisorConnection.Close()
-		defer workerConnection.Close()
+		defer supervisorConnection.Close() //nolint:errcheck // Best-effort cleanup.
+		defer workerConnection.Close()     //nolint:errcheck // Best-effort cleanup.
 		session, err := NewSupervisorSession(supervisorConnection, 99, Identity{UID: 501, GID: 20}, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -170,8 +170,8 @@ func TestSupervisorSessionReportsWorkerExitAndReloadFailure(t *testing.T) {
 
 func TestSupervisorSessionRecoversAfterTimedOutReload(t *testing.T) {
 	supervisorConnection, workerConnection := net.Pipe()
-	defer supervisorConnection.Close()
-	defer workerConnection.Close()
+	defer supervisorConnection.Close() //nolint:errcheck // Best-effort cleanup.
+	defer workerConnection.Close()     //nolint:errcheck // Best-effort cleanup.
 	session, err := NewSupervisorSession(supervisorConnection, 99, Identity{UID: 501, GID: 20}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -270,8 +270,8 @@ func TestSupervisorSessionRecoversAfterTimedOutReload(t *testing.T) {
 
 func TestSupervisorSessionProcessExitIsRepeatable(t *testing.T) {
 	supervisorConnection, workerConnection := net.Pipe()
-	defer supervisorConnection.Close()
-	defer workerConnection.Close()
+	defer supervisorConnection.Close() //nolint:errcheck // Best-effort cleanup.
+	defer workerConnection.Close()     //nolint:errcheck // Best-effort cleanup.
 	processDone := make(chan error, 1)
 	session, err := NewSupervisorSession(supervisorConnection, 99, Identity{UID: 501, GID: 20}, processDone)
 	if err != nil {

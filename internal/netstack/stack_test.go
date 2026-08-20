@@ -44,7 +44,7 @@ func TestTCPForwarderEchoOverMemoryLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer proxy.Close()
+	defer proxy.Close() //nolint:errcheck // Best-effort cleanup.
 
 	clientStack, clientLink := newTestClientStack(t, [4]byte{10, 0, 0, 2})
 	defer func() {
@@ -69,7 +69,7 @@ func TestTCPForwarderEchoOverMemoryLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial in-memory forwarded TCP: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 
 	payload := make([]byte, 256*1024)
 	for i := range payload {
@@ -149,7 +149,7 @@ func TestUDPForwarderEchoOverMemoryLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer proxy.Close()
+	defer proxy.Close() //nolint:errcheck // Best-effort cleanup.
 	clientStack, clientLink := newTestClientStack(t, [4]byte{10, 0, 0, 2})
 	defer func() {
 		clientLink.Close()
@@ -166,7 +166,7 @@ func TestUDPForwarderEchoOverMemoryLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 	payload := []byte("udp preserves one datagram")
 	if _, err := conn.Write(payload); err != nil {
@@ -229,7 +229,7 @@ func TestIPv6TCPAndUDPForwardersOverMemoryLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer proxy.Close()
+	defer proxy.Close() //nolint:errcheck // Best-effort cleanup.
 
 	clientAddress := netip.MustParseAddr("fd00:7::2")
 	clientStack, clientLink := newTestIPv6ClientStack(t, clientAddress)
@@ -269,7 +269,7 @@ func TestIPv6TCPAndUDPForwardersOverMemoryLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer udpConnection.Close()
+	defer udpConnection.Close() //nolint:errcheck // Best-effort cleanup.
 	_ = udpConnection.SetDeadline(time.Now().Add(3 * time.Second))
 	udpPayload := []byte("udp6")
 	if _, err := udpConnection.Write(udpPayload); err != nil {

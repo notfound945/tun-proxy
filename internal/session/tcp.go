@@ -183,7 +183,7 @@ func (tcpSession *TCP) Handle(ctx context.Context, flow netstack.TCPFlow, client
 		}
 		return fmt.Errorf("rule %d outbound %q for %s: %w", decision.RuleID, decision.Outbound, domain, err)
 	}
-	defer upstream.Close()
+	defer upstream.Close() //nolint:errcheck // Best-effort cleanup.
 
 	if err := netstack.Relay(ctx, client, upstream, tcpSession.relayTimeout); err != nil {
 		tcpSession.metrics.failedFlows.Add(1)

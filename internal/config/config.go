@@ -251,7 +251,7 @@ func readConfigFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open config %q: %w", path, err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // Best-effort cleanup.
 	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("inspect config %q: %w", path, err)

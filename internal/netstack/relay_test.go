@@ -12,8 +12,8 @@ import (
 func TestRelayPreservesTCPHalfClose(t *testing.T) {
 	app, relayClient := tcpPair(t)
 	relayUpstream, server := tcpPair(t)
-	defer app.Close()
-	defer server.Close()
+	defer app.Close()    //nolint:errcheck // Best-effort cleanup.
+	defer server.Close() //nolint:errcheck // Best-effort cleanup.
 
 	relayDone := make(chan error, 1)
 	go func() {
@@ -57,8 +57,8 @@ func TestRelayPreservesTCPHalfClose(t *testing.T) {
 func TestRelayCancellationStopsBothDirections(t *testing.T) {
 	leftRelay, leftPeer := net.Pipe()
 	rightRelay, rightPeer := net.Pipe()
-	defer leftPeer.Close()
-	defer rightPeer.Close()
+	defer leftPeer.Close()  //nolint:errcheck // Best-effort cleanup.
+	defer rightPeer.Close() //nolint:errcheck // Best-effort cleanup.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -80,7 +80,7 @@ func tcpPair(t *testing.T) (*net.TCPConn, *net.TCPConn) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck // Best-effort cleanup.
 
 	accepted := make(chan *net.TCPConn, 1)
 	acceptErr := make(chan error, 1)
@@ -100,11 +100,11 @@ func tcpPair(t *testing.T) (*net.TCPConn, *net.TCPConn) {
 	case server := <-accepted:
 		return client, server
 	case err := <-acceptErr:
-		client.Close()
+		_ = client.Close()
 		t.Fatal(err)
 		return nil, nil
 	case <-time.After(time.Second):
-		client.Close()
+		_ = client.Close()
 		t.Fatal("accept timed out")
 		return nil, nil
 	}

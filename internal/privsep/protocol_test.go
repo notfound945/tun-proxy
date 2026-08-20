@@ -66,8 +66,8 @@ func TestCodecRejectsOversizedAndUnknownFrames(t *testing.T) {
 
 func TestHandshakeEnforcesPreparedCommitRunningOrder(t *testing.T) {
 	parent, child := net.Pipe()
-	defer parent.Close()
-	defer child.Close()
+	defer parent.Close() //nolint:errcheck // Best-effort cleanup.
+	defer child.Close()  //nolint:errcheck // Best-effort cleanup.
 	parentCodec, _ := NewCodec(parent, parent)
 	childCodec, _ := NewCodec(child, child)
 	supervisor, _ := NewSupervisorHandshake(parentCodec)

@@ -141,15 +141,15 @@ func generateDefaultConfig(path string, force bool) (string, error) {
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return "", fmt.Errorf("secure temporary config %q: %w", temporaryPath, err)
 	}
 	if _, err := temporary.Write(contents); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return "", fmt.Errorf("write temporary config %q: %w", temporaryPath, err)
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return "", fmt.Errorf("sync temporary config %q: %w", temporaryPath, err)
 	}
 	if err := temporary.Close(); err != nil {

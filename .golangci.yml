@@ -20,16 +20,6 @@ linters:
         - -ST1005
   exclusions:
     rules:
-      # Cleanup paths deliberately use best-effort close/remove operations.
-      - linters:
-          - errcheck
-        text: 'Error return value of `.*\.Close` is not checked'
-      - linters:
-          - errcheck
-        text: 'Error return value of `.*\.ActivateAndServe` is not checked'
-      - linters:
-          - errcheck
-        text: 'Error return value of `os\.Remove` is not checked'
       # These are intentional compatibility/readability choices in existing code.
       - path: internal/fakedns/server\.go
         linters:

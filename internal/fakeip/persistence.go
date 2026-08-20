@@ -303,7 +303,7 @@ func readSnapshot(path string) (Snapshot, bool, error) {
 	if err != nil {
 		return Snapshot{}, false, fmt.Errorf("open persistence file: %w", err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // Best-effort cleanup.
 	decoder := yaml.NewDecoder(io.LimitReader(file, maxPersistenceSize+1))
 	decoder.KnownFields(true)
 	var snapshot Snapshot
@@ -490,7 +490,7 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer directory.Close() //nolint:errcheck // Best-effort cleanup.
 	return directory.Sync()
 }
 

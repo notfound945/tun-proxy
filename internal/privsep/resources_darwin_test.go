@@ -17,12 +17,12 @@ func TestOpenControlFileProvidesPollableConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer connection.Close() //nolint:errcheck // Best-effort cleanup.
 	peer, err := openControlFile(right, "test peer")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer peer.Close()
+	defer peer.Close() //nolint:errcheck // Best-effort cleanup.
 
 	want := []byte("private-control")
 	go func() { _, _ = peer.Write(want) }()
@@ -40,19 +40,19 @@ func TestOpenDNSFilesReconstructsListeners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer udp.Close()
+	defer udp.Close() //nolint:errcheck // Best-effort cleanup.
 	tcp, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tcp.Close()
+	defer tcp.Close() //nolint:errcheck // Best-effort cleanup.
 	udpFile, err := udp.File()
 	if err != nil {
 		t.Fatal(err)
 	}
 	tcpFile, err := tcp.File()
 	if err != nil {
-		udpFile.Close()
+		_ = udpFile.Close()
 		t.Fatal(err)
 	}
 
@@ -60,8 +60,8 @@ func TestOpenDNSFilesReconstructsListeners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listeners.UDP.Close()
-	defer listeners.TCP.Close()
+	defer listeners.UDP.Close() //nolint:errcheck // Best-effort cleanup.
+	defer listeners.TCP.Close() //nolint:errcheck // Best-effort cleanup.
 	if listeners.UDP.LocalAddr().String() != udp.LocalAddr().String() {
 		t.Fatalf("UDP address = %s, want %s", listeners.UDP.LocalAddr(), udp.LocalAddr())
 	}

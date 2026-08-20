@@ -20,7 +20,7 @@ func TestUDPTruncationFallsBackToTCPOnBoundInterface(t *testing.T) {
 	}
 	listener, err := net.Listen("tcp4", address.String())
 	if err != nil {
-		packetConnection.Close()
+		_ = packetConnection.Close()
 		t.Fatal(err)
 	}
 	var udpQueries atomic.Uint64
@@ -42,8 +42,8 @@ func TestUDPTruncationFallsBackToTCPOnBoundInterface(t *testing.T) {
 	})
 	udpServer := &dns.Server{PacketConn: packetConnection, Handler: handler}
 	tcpServer := &dns.Server{Listener: listener, Handler: handler}
-	go udpServer.ActivateAndServe()
-	go tcpServer.ActivateAndServe()
+	go udpServer.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
+	go tcpServer.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -74,7 +74,7 @@ func TestIPv6UDPTruncationFallsBackToTCPOnBoundInterface(t *testing.T) {
 	}
 	listener, err := net.Listen("tcp6", address.String())
 	if err != nil {
-		packetConnection.Close()
+		_ = packetConnection.Close()
 		t.Fatal(err)
 	}
 	var udpQueries atomic.Uint64
@@ -96,8 +96,8 @@ func TestIPv6UDPTruncationFallsBackToTCPOnBoundInterface(t *testing.T) {
 	})
 	udpServer := &dns.Server{PacketConn: packetConnection, Handler: handler}
 	tcpServer := &dns.Server{Listener: listener, Handler: handler}
-	go udpServer.ActivateAndServe()
-	go tcpServer.ActivateAndServe()
+	go udpServer.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
+	go tcpServer.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -217,7 +217,7 @@ func TestLookupIPv4CachesPerClient(t *testing.T) {
 		}
 		_ = writer.WriteMsg(reply)
 	})}
-	go server.ActivateAndServe()
+	go server.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -268,7 +268,7 @@ func TestLookupIPv4AndIPv6CacheIndependently(t *testing.T) {
 		}
 		_ = writer.WriteMsg(reply)
 	})}
-	go server.ActivateAndServe()
+	go server.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -363,7 +363,7 @@ func TestLookupsUseCNAMEChainTTLAndIgnoreUnrelatedAddresses(t *testing.T) {
 				}
 				_ = writer.WriteMsg(reply)
 			})}
-			go server.ActivateAndServe()
+			go server.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
@@ -413,7 +413,7 @@ func TestLookupIPv6NoAddressIsBusinessError(t *testing.T) {
 		reply.SetReply(request)
 		_ = writer.WriteMsg(reply)
 	})}
-	go server.ActivateAndServe()
+	go server.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -440,7 +440,7 @@ func TestLookupIPv4TreatsNXDOMAINAsBusinessError(t *testing.T) {
 		reply.SetRcode(request, dns.RcodeNameError)
 		_ = writer.WriteMsg(reply)
 	})}
-	go server.ActivateAndServe()
+	go server.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -464,7 +464,7 @@ func startUDPDNSServer(t *testing.T, handler dns.Handler) netip.AddrPort {
 	}
 	address := packetConnection.LocalAddr().(*net.UDPAddr).AddrPort()
 	server := &dns.Server{PacketConn: packetConnection, Handler: handler}
-	go server.ActivateAndServe()
+	go server.ActivateAndServe() //nolint:errcheck // Test cleanup stops the server.
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

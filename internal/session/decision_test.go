@@ -21,7 +21,7 @@ func TestDecideFlowReResolvesWhenCIDRChangesOutbound(t *testing.T) {
 	}}
 	specialResolver := &fakeResolver{addresses: []netip.Addr{netip.MustParseAddr("198.51.100.20")}}
 	connected, peer := net.Pipe()
-	defer peer.Close()
+	defer peer.Close() //nolint:errcheck // Best-effort cleanup.
 	specialDialer := &fakeDialer{results: []dialResult{{conn: connected}}}
 	routes := map[string]Route{
 		"candidate": {Name: "candidate", Resolver: candidateResolver, Dialer: &fakeDialer{}},
@@ -44,7 +44,7 @@ func TestDecideFlowReResolvesWhenCIDRChangesOutbound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if selected != "special" || specialResolver.calls != 1 || len(specialDialer.calls) != 1 || specialDialer.calls[0] != netip.MustParseAddrPort("198.51.100.20:443") {
 		t.Fatalf("selected=%q resolver calls=%d dial calls=%v", selected, specialResolver.calls, specialDialer.calls)
 	}
@@ -79,7 +79,7 @@ func TestDecideFlowMatchesLiteralWithoutResolution(t *testing.T) {
 	matcher := newCIDRMatcher(t, "203.0.113.0/24", "special", "candidate")
 	resolver := &fakeResolver{err: errors.New("must not resolve a literal")}
 	connected, peer := net.Pipe()
-	defer peer.Close()
+	defer peer.Close() //nolint:errcheck // Best-effort cleanup.
 	dialer := &fakeDialer{results: []dialResult{{conn: connected}}}
 	routes := map[string]Route{
 		"candidate": {Name: "candidate", Resolver: resolver, Dialer: &fakeDialer{}},
@@ -96,7 +96,7 @@ func TestDecideFlowMatchesLiteralWithoutResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if selected != "special" || resolver.calls != 0 || len(dialer.calls) != 1 || dialer.calls[0] != netip.MustParseAddrPort("203.0.113.9:443") {
 		t.Fatalf("selected=%q resolver calls=%d dial calls=%v", selected, resolver.calls, dialer.calls)
 	}
@@ -107,7 +107,7 @@ func TestUDPUsesReResolvedAddressesWithoutThirdLookup(t *testing.T) {
 	candidateResolver := &fakeResolver{addresses: []netip.Addr{netip.MustParseAddr("203.0.113.53")}}
 	specialResolver := &fakeResolver{addresses: []netip.Addr{netip.MustParseAddr("198.51.100.53")}}
 	upstream, server := net.Pipe()
-	defer server.Close()
+	defer server.Close() //nolint:errcheck // Best-effort cleanup.
 	dialer := &fakePacketDialer{results: []dialResult{{conn: upstream}}}
 	routes := map[string]Route{
 		"candidate": {Name: "candidate", Resolver: candidateResolver, PacketDialer: &fakePacketDialer{}},
@@ -134,7 +134,7 @@ func TestUDPUsesReResolvedAddressesWithoutThirdLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Best-effort cleanup.
 	if err := <-readDone; err != nil {
 		t.Fatal(err)
 	}

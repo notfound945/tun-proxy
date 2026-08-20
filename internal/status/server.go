@@ -187,7 +187,7 @@ func Query(ctx context.Context, path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("connect status socket: %w", err)
 	}
-	defer connection.Close()
+	defer connection.Close() //nolint:errcheck // Best-effort cleanup.
 	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
 	decoder := json.NewDecoder(connection)
 	decoder.DisallowUnknownFields()
