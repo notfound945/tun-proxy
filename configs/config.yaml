@@ -1,0 +1,87 @@
+version: 1
+
+log:
+  level: info
+  format: text
+
+system:
+  state_file: /var/run/tun-proxy/state.json
+  lock_file: /var/run/tun-proxy/tun-proxy.lock
+  manage_dns: true
+
+capture:
+  # Keep disabled until the Phase 8.4 root route/capture acceptance run.
+  default_route: false
+
+tun:
+  address: 10.255.0.2
+  peer: 10.255.0.1
+  # Enable together with fake_ipv6 below for the Phase 8.3 dual-stack path.
+  # This host currently has no public IPv6 default route. The runtime safety
+  # gate therefore keeps Fake AAAA disabled while retaining this preparation.
+  ipv6_address: fd00:7475:6e70:ffff::2
+  ipv6_peer: fd00:7475:6e70:ffff::1
+  mtu: 1400
+  packet_queue: 1024
+  buffer_pool: 128
+
+fake_ip:
+  cidr: 198.18.0.0/15
+  dns_ttl: 1m
+  mapping_ttl: 24h
+  max_mappings: 65536
+  persistence_file: /var/lib/tun-proxy/fake-ip.yaml
+  exclude:
+    - localhost
+    - "*.local"
+    - "*.lan"
+
+fake_ipv6:
+  cidr: fd00:7475:6e70::/96
+  max_mappings: 65536
+  persistence_file: /var/lib/tun-proxy/fake-ipv6.yaml
+
+dns:
+  listen: 127.0.0.1:53
+  udp: true
+  tcp: true
+  default_outbound: wired
+  max_concurrent: 256
+
+sessions:
+  max_tcp_flows: 1024
+  udp_idle_timeout: 2m
+  max_udp_sessions: 4096
+  max_udp_sessions_per_source: 256
+
+outbounds:
+  wifi:
+    type: direct
+    interface: en0
+    # dhcp uses the interface lease first and falls back to the required list.
+    dns_source: dhcp
+    dns:
+      - "1.1.1.1:53"
+      - "8.8.8.8:53"
+    connect_timeout: 10s
+    fallback: reject
+
+  wired:
+    type: direct
+    interface: en7
+    # DHCP DNS on en7 takes priority; this required list remains the fallback.
+    dns_source: dhcp
+    dns:
+      - "9.9.9.9:53"
+    connect_timeout: 10s
+    fallback: reject
+
+  reject:
+    type: reject
+
+rules:
+  - domain_suffix:
+      - cursor.sh
+    outbound: wifi
+
+  - outbound: wired

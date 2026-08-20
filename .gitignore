@@ -1,0 +1,49 @@
+# Go build outputs
+/bin/
+/build/
+/dist/
+/tun-proxy
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test, coverage, benchmark, and profiling outputs
+*.test
+*.out
+*.coverprofile
+*.prof
+*.pprof
+/coverage/
+/coverage.html
+
+# Local Go workspace files (the module files go.mod and go.sum are committed)
+go.work
+go.work.sum
+
+# Vendored dependencies generated locally
+/vendor/
+
+# Runtime and temporary files
+*.log
+*.pid
+*.sock
+/tmp/
+
+# Local environment overrides and secrets
+.env
+.env.*
+!.env.example
+
+# IDE and editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride

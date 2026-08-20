@@ -1,0 +1,214 @@
+# Disabled on 2026-08-20: releases are packaged and published locally with
+# scripts/release.sh. This file is intentionally kept as the previous GitHub
+# Actions implementation and is ignored because it does not end in .yml/.yaml.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-tag:
+    name: Validate annotated SemVer tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      build-time: ${{ steps.metadata.outputs.build-time }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag and export build metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+
+          if [[ ! "${tag}" =~ ${semver_re} ]]; then
+            echo "::error::Tag '${tag}' is not a valid semantic version. Expected vMAJOR.MINOR.PATCH (for example, v1.2.3 or v1.2.3-rc.1)."
+            exit 1
+          fi
+
+          tag_type="$(git cat-file -t "refs/tags/${tag}")"
+          if [[ "${tag_type}" != "tag" ]]; then
+            echo "::error::Tag '${tag}' is lightweight. Releases require an annotated tag created with 'git tag -a'."
+            exit 1
+          fi
+
+          commit="$(git rev-parse --short=12 "${tag}^{commit}")"
+          build_time="$(git for-each-ref --format='%(taggerdate:iso8601-strict)' "refs/tags/${tag}")"
+          if [[ -z "${build_time}" ]]; then
+            echo "::error::Annotated tag '${tag}' has no tagger timestamp."
+            exit 1
+          fi
+
+          {
+            echo "tag=${tag}"
+            echo "version=${tag#v}"
+            echo "commit=${commit}"
+            echo "build-time=${build_time}"
+          } >> "${GITHUB_OUTPUT}"
+
+  check:
+    name: Test and vet
+    needs: validate-tag
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run checks
+        run: make check
+
+  build:
+    name: Build macOS ${{ matrix.goarch }}
+    needs: validate-tag
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            host_arch: arm64
+            runner: macos-15
+          - goarch: amd64
+            host_arch: x86_64
+            runner: macos-15-intel
+    env:
+      GOOS: darwin
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "1"
+      HOST_ARCH: ${{ matrix.host_arch }}
+      VERSION: ${{ needs.validate-tag.outputs.version }}
+      COMMIT: ${{ needs.validate-tag.outputs.commit }}
+      BUILD_TIME: ${{ needs.validate-tag.outputs.build-time }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_name="tun-proxy_${VERSION}_darwin_${GOARCH}"
+          package_dir="dist/${package_name}"
+          mkdir -p "${package_dir}"
+
+          ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}"
+          go build \
+            -buildvcs=false \
+            -trimpath \
+            -ldflags "${ldflags}" \
+            -o "${package_dir}/tun-proxy" \
+            ./cmd/tun-proxy
+
+          cp README.md "${package_dir}/"
+          cp configs/example.yaml "${package_dir}/config.example.yaml"
+
+          if [[ "$(uname -m)" != "${HOST_ARCH}" ]]; then
+            echo "::error::Runner architecture does not match ${GOARCH}."
+            exit 1
+          fi
+          file "${package_dir}/tun-proxy" | grep -F "${HOST_ARCH}"
+
+          expected="tun-proxy ${VERSION} (commit ${COMMIT}, built ${BUILD_TIME})"
+          actual="$("${package_dir}/tun-proxy" version)"
+          [[ "${actual}" == "${expected}" ]]
+
+          COPYFILE_DISABLE=1 tar -czf "dist/${package_name}.tar.gz" -C dist "${package_name}"
+
+      - name: Upload packaged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-darwin-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - validate-tag
+      - check
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.validate-tag.outputs.tag }}
+      VERSION: ${{ needs.validate-tag.outputs.version }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          LC_ALL=C sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create or update release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          prerelease=()
+          version_without_build="${VERSION%%+*}"
+          if [[ "${version_without_build}" == *-* ]]; then
+            prerelease+=(--prerelease)
+          fi
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber
+          else
+            gh release create "${TAG}" dist/* \
+              --verify-tag \
+              --title "${TAG}" \
+              --notes-from-tag \
+              "${prerelease[@]}"
+          fi
