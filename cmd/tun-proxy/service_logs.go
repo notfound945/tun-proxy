@@ -27,33 +27,44 @@ type followedLog struct {
 	Info   os.FileInfo
 }
 
+type serviceLogsOptions struct {
+	lines  int
+	follow bool
+	stream string
+}
+
+func newServiceLogsFlagSet(output io.Writer, options *serviceLogsOptions) *flag.FlagSet {
+	if options == nil {
+		options = &serviceLogsOptions{}
+	}
+	flags := newCommandFlagSet("service logs", output)
+	flags.IntVar(&options.lines, "lines", 100, "number of trailing `LINES`")
+	flags.IntVar(&options.lines, "n", 100, "alias for -lines")
+	flags.BoolVar(&options.follow, "follow", false, "follow appended log data")
+	flags.BoolVar(&options.follow, "f", false, "alias for -follow")
+	flags.StringVar(&options.stream, "stream", "both", "log `STREAM` (stdout, stderr, or both)")
+	return flags
+}
+
 func serviceLogsCommand(ctx context.Context, layout launchservice.Layout, args []string) error {
-	flags := flag.NewFlagSet("service logs", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	flags.Usage = func() { fprintUsage(flags.Output(), []string{"service", "logs"}) }
-	lines := 100
-	flags.IntVar(&lines, "lines", 100, "number of trailing lines")
-	flags.IntVar(&lines, "n", 100, "alias for -lines")
-	follow := false
-	flags.BoolVar(&follow, "follow", false, "follow appended log data")
-	flags.BoolVar(&follow, "f", false, "alias for -follow")
-	stream := flags.String("stream", "both", "stdout, stderr, or both")
+	options := serviceLogsOptions{}
+	flags := newServiceLogsFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("service logs received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if lines < 0 || lines > 10000 {
-		return fmt.Errorf("service logs lines must be between 0 and 10000, got %d", lines)
+	if options.lines < 0 || options.lines > 10000 {
+		return fmt.Errorf("service logs lines must be between 0 and 10000, got %d", options.lines)
 	}
-	logs, err := selectedManagedLogs(layout, strings.ToLower(*stream))
+	logs, err := selectedManagedLogs(layout, strings.ToLower(options.stream))
 	if err != nil {
 		return err
 	}
 	followers := make([]followedLog, 0, len(logs))
 	for _, log := range logs {
-		contents, info, err := tailManagedLog(log.Path, lines)
+		contents, info, err := tailManagedLog(log.Path, options.lines)
 		if err != nil {
 			return err
 		}
@@ -68,7 +79,7 @@ func serviceLogsCommand(ctx context.Context, layout launchservice.Layout, args [
 		}
 		followers = append(followers, followedLog{managedLog: log, Offset: info.Size(), Info: info})
 	}
-	if !follow {
+	if !options.follow {
 		return nil
 	}
 	return followManagedLogs(ctx, followers)

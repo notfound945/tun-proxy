@@ -46,7 +46,8 @@ go build -o ./bin/tun-proxy ./cmd/tun-proxy
 sudo ./bin/tun-proxy service install \
   -binary ./bin/tun-proxy \
   -config ./configs/config.yaml \
-  -start=true
+  -start=true \
+  -start-at-boot=false
 
 sudo ./bin/tun-proxy service status -json
 sudo ./bin/tun-proxy service stop
@@ -63,18 +64,17 @@ sudo ./bin/tun-proxy service uninstall
 `~/.config/tun-proxy/config.yaml` (using the invoking `SUDO_USER` home when
 run through `sudo`).
 `-start=false` installs the files without bootstrapping the job in the current
-boot session. Because the plist is installed under `/Library/LaunchDaemons`
-with `RunAtLoad=true`, it is eligible to load and start at the next system
-boot.
+boot session. Boot startup is independently controlled by
+`-start-at-boot` and defaults to `false`.
 
 The plist invokes the installed binary directly as `_service-run`; it does not
-use a shell. `RunAtLoad=true` starts a registered job, while
-`KeepAlive.SuccessfulExit=false` restarts it after a non-successful exit. A
-normal `service stop` sends SIGTERM, lets tun-proxy restore its recorded system
-state, and exits successfully, so the loaded job remains stopped until an
-explicit start or the next boot. A crash is restarted by launchd, and the
-hidden service entry point runs the existing stale-state cleanup before the
-new process performs preflight.
+use a shell. With `-start-at-boot=true`, `RunAtLoad=true` starts a registered
+job and `KeepAlive.SuccessfulExit=false` restarts it after a non-successful
+exit. With the default policy, `RunAtLoad=false` and `KeepAlive` is omitted
+because launchd otherwise treats it as an implicit boot-start request. A normal
+`service stop` sends SIGTERM and lets tun-proxy restore its recorded system
+state. The hidden service entry point runs stale-state cleanup before a new
+process performs preflight.
 
 `upgrade` is a controlled stop-and-restart, not a hot reload: active flows are
 allowed to drain within the normal shutdown deadline; the loaded job is
@@ -106,7 +106,7 @@ process's historical ownership or resolve a shared UDP `SO_REUSEPORT` owner.
 The automated suite covers:
 
 - valid plist XML and direct fixed program arguments;
-- `RunAtLoad`, failure-only restart, timeout, umask, and log paths;
+- opt-in `RunAtLoad` and failure-only restart, timeout, umask, and log paths;
 - managed-path confinement and symlink rejection;
 - transactional activation, removal, rollback, and residue cleanup;
 - install with and without immediate start;

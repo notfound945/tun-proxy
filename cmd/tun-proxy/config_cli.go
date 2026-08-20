@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,25 @@ type configValidationResult struct {
 
 type finderCommandRunner func(context.Context, string, ...string) ([]byte, error)
 
+type configOptions struct {
+	finder     bool
+	generate   bool
+	force      bool
+	configPath string
+}
+
+func newConfigFlagSet(output io.Writer, options *configOptions) *flag.FlagSet {
+	if options == nil {
+		options = &configOptions{}
+	}
+	flags := newCommandFlagSet("config", output)
+	flags.BoolVar(&options.finder, "finder", false, "reveal the selected configuration in Finder")
+	flags.BoolVar(&options.generate, "generate", false, "generate the embedded default configuration")
+	flags.BoolVar(&options.force, "force", false, "overwrite an existing configuration with -generate")
+	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "configuration file `PATH` to use")
+	return flags
+}
+
 func configCommand(args []string) error {
 	if len(args) == 0 {
 		return usageError([]string{"config"}, "a config command is required")
@@ -45,34 +65,29 @@ func configCommand(args []string) error {
 }
 
 func configOptionsCommand(ctx context.Context, args []string, runner finderCommandRunner) error {
-	flags := flag.NewFlagSet("config", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	flags.Usage = func() { fprintUsage(flags.Output(), []string{"config"}) }
-	finder := flags.Bool("finder", false, "reveal the selected configuration in Finder")
-	generate := flags.Bool("generate", false, "generate the embedded default configuration")
-	force := flags.Bool("force", false, "overwrite an existing configuration with -generate")
-	path := flags.String("config", defaultUserConfigPath(), "configuration file to use")
+	options := configOptions{}
+	flags := newConfigFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("config received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if *finder == *generate {
+	if options.finder == options.generate {
 		return usageError([]string{"config"}, "choose exactly one of -finder or -generate")
 	}
-	if *force && !*generate {
+	if options.force && !options.generate {
 		return usageError([]string{"config"}, "-force requires -generate")
 	}
-	if *generate {
-		generated, err := generateDefaultConfig(*path, *force)
+	if options.generate {
+		generated, err := generateDefaultConfig(options.configPath, options.force)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("generated config: %s\n", generated)
 		return nil
 	}
-	revealed, err := revealConfigInFinder(ctx, *path, runner)
+	revealed, err := revealConfigInFinder(ctx, options.configPath, runner)
 	if err != nil {
 		return err
 	}
@@ -203,24 +218,37 @@ func executeFinderCommand(ctx context.Context, executable string, args ...string
 	return exec.CommandContext(ctx, executable, args...).CombinedOutput()
 }
 
+type configValidateOptions struct {
+	configPath string
+	managed    bool
+	jsonOutput bool
+}
+
+func newConfigValidateFlagSet(output io.Writer, options *configValidateOptions) *flag.FlagSet {
+	if options == nil {
+		options = &configValidateOptions{}
+	}
+	flags := newCommandFlagSet("config validate", output)
+	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "`PATH` to YAML configuration")
+	flags.BoolVar(&options.managed, "service", false, "enforce the managed service path contract")
+	flags.BoolVar(&options.jsonOutput, "json", false, "print validation result as JSON")
+	return flags
+}
+
 func configValidateCommand(args []string) error {
-	flags := flag.NewFlagSet("config validate", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	flags.Usage = func() { fprintUsage(flags.Output(), []string{"config", "validate"}) }
-	path := flags.String("config", defaultUserConfigPath(), "path to YAML configuration")
-	managed := flags.Bool("service", false, "enforce the managed service path contract")
-	jsonOutput := flags.Bool("json", false, "print validation result as JSON")
+	options := configValidateOptions{}
+	flags := newConfigValidateFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("config validate received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	result, err := validateConfigFile(*path, *managed, launchservice.DefaultLayout())
+	result, err := validateConfigFile(options.configPath, options.managed, launchservice.DefaultLayout())
 	if err != nil {
 		return err
 	}
-	if *jsonOutput {
+	if options.jsonOutput {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)

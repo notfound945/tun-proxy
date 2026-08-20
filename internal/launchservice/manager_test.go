@@ -113,12 +113,15 @@ func TestInstallCreatesArtifactsAndStarts(t *testing.T) {
 			state = RuntimeState{Running: true, PID: 42, Phase: "running"}
 		}
 	}
-	if err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), true); err != nil {
+	if err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), true, false); err != nil {
 		t.Fatal(err)
 	}
 	assertFile(t, layout.Binary, "binary-v1", 0o755)
 	assertFile(t, layout.Config, "config-v1", 0o600)
 	assertFileMode(t, layout.Plist, 0o644)
+	if startAtBoot, err := ManifestStartAtBoot([]byte(readTestFile(t, layout.Plist))); err != nil || startAtBoot {
+		t.Fatalf("installed boot policy = %t, %v; want false", startAtBoot, err)
+	}
 	wantCalls := []string{
 		launchctlPath + " print system/" + layout.Label,
 		launchctlPath + " print system/" + layout.Label,
@@ -139,7 +142,7 @@ func TestInstallWithoutStartLeavesJobUnloaded(t *testing.T) {
 	state := RuntimeState{}
 	runner := &fakeRunner{}
 	manager := testManager(layout, runner, &state)
-	if err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), false); err != nil {
+	if err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), false, false); err != nil {
 		t.Fatal(err)
 	}
 	if runner.loaded || containsCall(runner.calls, " bootstrap ") || containsCall(runner.calls, " kickstart ") {
@@ -154,7 +157,7 @@ func TestServiceOperationsWithoutInstallationSuggestCompleteInstallCommand(t *te
 		"start":   func(manager *Manager) error { return manager.Start(context.Background()) },
 		"restart": func(manager *Manager) error { return manager.Restart(context.Background()) },
 		"reload":  func(manager *Manager) error { return manager.Reload(context.Background()) },
-		"upgrade": func(manager *Manager) error { return manager.Upgrade(context.Background(), "/unused/binary", "") },
+		"upgrade": func(manager *Manager) error { return manager.Upgrade(context.Background(), "/unused/binary", "", nil) },
 	}
 	for name, operation := range operations {
 		t.Run(name, func(t *testing.T) {
@@ -270,7 +273,7 @@ func TestInstallBootstrapFailureRollsBack(t *testing.T) {
 	}}
 	manager := testManager(layout, runner, &state)
 	manager.Recover = func(context.Context) error { recovered++; return nil }
-	err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), true)
+	err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), true, false)
 	if err == nil || !strings.Contains(err.Error(), "bootstrap failed") {
 		t.Fatalf("Install() error = %v", err)
 	}
@@ -303,7 +306,7 @@ func TestInstallReplacesConfigPreservedByDefaultUninstall(t *testing.T) {
 	configSource := filepath.Join(filepath.Dir(layout.Config), "../source-config")
 	writeTestFile(t, filepath.Clean(binarySource), "new-binary", 0o755)
 	writeTestFile(t, filepath.Clean(configSource), "new-config", 0o600)
-	if err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), false); err != nil {
+	if err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), false, false); err != nil {
 		t.Fatal(err)
 	}
 	assertFile(t, layout.Binary, "new-binary", 0o755)
@@ -330,7 +333,7 @@ func TestFailedReinstallRestoresPreservedConfig(t *testing.T) {
 	}}
 	manager := testManager(layout, runner, &state)
 	manager.Recover = func(context.Context) error { return nil }
-	if err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), true); err == nil {
+	if err := manager.Install(context.Background(), filepath.Clean(binarySource), filepath.Clean(configSource), true, false); err == nil {
 		t.Fatal("failed reinstall unexpectedly succeeded")
 	}
 	assertFile(t, layout.Config, "preserved-config", 0o600)
@@ -438,7 +441,7 @@ func TestUpgradeRollsBackAndRestartsOldVersion(t *testing.T) {
 		}
 	}
 	manager := testManager(layout, runner, &state)
-	err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), filepath.Clean(newConfig))
+	err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), filepath.Clean(newConfig), nil)
 	if err == nil || !strings.Contains(err.Error(), "new version failed") {
 		t.Fatalf("Upgrade() error = %v", err)
 	}
@@ -456,6 +459,7 @@ func TestUpgradeRollsBackAndRestartsOldVersion(t *testing.T) {
 func TestUpgradeReplacesArtifactsAndRestarts(t *testing.T) {
 	layout := testLayout(t)
 	createInstalledArtifacts(t, layout, "old-binary", "old-config")
+	writeInstalledManifest(t, layout, true)
 	newBinary := filepath.Join(filepath.Dir(layout.Binary), "../new-binary")
 	newConfig := filepath.Join(filepath.Dir(layout.Config), "../new-config")
 	writeTestFile(t, filepath.Clean(newBinary), "new-binary", 0o755)
@@ -471,7 +475,7 @@ func TestUpgradeReplacesArtifactsAndRestarts(t *testing.T) {
 		}
 	}
 	manager := testManager(layout, runner, &state)
-	if err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), filepath.Clean(newConfig)); err != nil {
+	if err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), filepath.Clean(newConfig), nil); err != nil {
 		t.Fatal(err)
 	}
 	assertFile(t, layout.Binary, "new-binary", 0o755)
@@ -479,7 +483,27 @@ func TestUpgradeReplacesArtifactsAndRestarts(t *testing.T) {
 	if !state.Running || state.PID != 99 {
 		t.Fatalf("new version was not restarted: state=%+v", state)
 	}
+	if startAtBoot, err := ManifestStartAtBoot([]byte(readTestFile(t, layout.Plist))); err != nil || !startAtBoot {
+		t.Fatalf("upgraded boot policy = %t, %v; want preserved true", startAtBoot, err)
+	}
 	assertNoResidueTree(t, filepath.Dir(layout.Binary))
+}
+
+func TestUpgradeOverridesBootPolicy(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "old-binary", "old-config")
+	writeInstalledManifest(t, layout, true)
+	newBinary := filepath.Join(filepath.Dir(layout.Binary), "../new-binary")
+	writeTestFile(t, filepath.Clean(newBinary), "new-binary", 0o755)
+	state := RuntimeState{}
+	manager := testManager(layout, &fakeRunner{}, &state)
+	startAtBoot := false
+	if err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), "", &startAtBoot); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ManifestStartAtBoot([]byte(readTestFile(t, layout.Plist))); err != nil || got {
+		t.Fatalf("overridden boot policy = %t, %v; want false", got, err)
+	}
 }
 
 func TestUpgradeRestoresLoadedStoppedState(t *testing.T) {
@@ -498,7 +522,7 @@ func TestUpgradeRestoresLoadedStoppedState(t *testing.T) {
 		}
 	}
 	manager := testManager(layout, runner, &state)
-	if err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), ""); err != nil {
+	if err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), "", nil); err != nil {
 		t.Fatal(err)
 	}
 	assertFile(t, layout.Binary, "new-binary", 0o755)
@@ -552,6 +576,7 @@ func TestUninstallPreservesDataByDefault(t *testing.T) {
 func TestUninstallFailureRestoresLoadedStoppedService(t *testing.T) {
 	layout := testLayout(t)
 	createInstalledArtifacts(t, layout, "binary", "config")
+	wantPlist := readTestFile(t, layout.Plist)
 	if err := os.MkdirAll(layout.DataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +602,7 @@ func TestUninstallFailureRestoresLoadedStoppedService(t *testing.T) {
 		t.Fatalf("Uninstall() error = %v", err)
 	}
 	assertFile(t, layout.Binary, "binary", 0o755)
-	assertFile(t, layout.Plist, "plist", 0o644)
+	assertFile(t, layout.Plist, wantPlist, 0o644)
 	if !runner.loaded || state.Running {
 		t.Fatalf("service state was not restored to loaded/stopped: loaded=%t state=%+v", runner.loaded, state)
 	}
@@ -672,6 +697,7 @@ func TestPurgeCleanupFailureLeavesServiceFullyUninstalled(t *testing.T) {
 func TestPurgeAccountFailureRestoresStagedFiles(t *testing.T) {
 	layout := testLayout(t)
 	createInstalledArtifacts(t, layout, "binary", "config")
+	wantPlist := readTestFile(t, layout.Plist)
 	state := RuntimeState{}
 	manager := testManager(layout, &fakeRunner{}, &state)
 	accounts := manager.Accounts.(*fakeAccounts)
@@ -683,7 +709,7 @@ func TestPurgeAccountFailureRestoresStagedFiles(t *testing.T) {
 	}
 	assertFile(t, layout.Binary, "binary", 0o755)
 	assertFile(t, layout.Config, "config", 0o600)
-	assertFile(t, layout.Plist, "plist", 0o644)
+	assertFile(t, layout.Plist, wantPlist, 0o644)
 	if !accounts.exists {
 		t.Fatal("failed purge removed worker identity")
 	}
@@ -823,7 +849,7 @@ func createInstalledArtifacts(t *testing.T, layout Layout, binary, config string
 	}
 	writeTestFile(t, layout.Binary, binary, 0o755)
 	writeTestFile(t, layout.Config, config, 0o600)
-	writeTestFile(t, layout.Plist, "plist", 0o644)
+	writeInstalledManifest(t, layout, false)
 	for _, directory := range []string{layout.RuntimeDir, layout.WorkerDir, layout.DataDir} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
@@ -832,6 +858,15 @@ func createInstalledArtifacts(t *testing.T, layout Layout, binary, config string
 			t.Fatal(err)
 		}
 	}
+}
+
+func writeInstalledManifest(t *testing.T, layout Layout, startAtBoot bool) {
+	t.Helper()
+	manifest, err := Manifest(layout, startAtBoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, layout.Plist, string(manifest), 0o644)
 }
 
 func assertFile(t *testing.T, path, contents string, mode os.FileMode) {

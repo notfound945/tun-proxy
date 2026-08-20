@@ -125,7 +125,7 @@ func NewManager(layout Layout) *Manager {
 	return manager
 }
 
-func (manager *Manager) Install(ctx context.Context, binarySource, configSource string, start bool) (resultErr error) {
+func (manager *Manager) Install(ctx context.Context, binarySource, configSource string, start, startAtBoot bool) (resultErr error) {
 	if err := manager.validate(); err != nil {
 		return err
 	}
@@ -173,7 +173,7 @@ func (manager *Manager) Install(ctx context.Context, binarySource, configSource 
 			resultErr = errors.Join(resultErr, storage.rollback())
 		}
 	}()
-	manifest, err := Manifest(manager.Layout)
+	manifest, err := Manifest(manager.Layout, startAtBoot)
 	if err != nil {
 		return err
 	}
@@ -388,7 +388,7 @@ func (manager *Manager) Reload(ctx context.Context) error {
 	return nil
 }
 
-func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource string) (resultErr error) {
+func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource string, startAtBoot *bool) (resultErr error) {
 	if err := manager.validate(); err != nil {
 		return err
 	}
@@ -425,7 +425,20 @@ func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource 
 		defer os.Remove(configStage) //nolint:errcheck // Best-effort staging cleanup.
 		staged = append(staged, stagedTarget{configStage, manager.Layout.Config})
 	}
-	manifest, err := Manifest(manager.Layout)
+	effectiveStartAtBoot := false
+	if startAtBoot == nil {
+		contents, err := os.ReadFile(manager.Layout.Plist)
+		if err != nil {
+			return fmt.Errorf("read installed launchd manifest: %w", err)
+		}
+		effectiveStartAtBoot, err = ManifestStartAtBoot(contents)
+		if err != nil {
+			return err
+		}
+	} else {
+		effectiveStartAtBoot = *startAtBoot
+	}
+	manifest, err := Manifest(manager.Layout, effectiveStartAtBoot)
 	if err != nil {
 		return err
 	}
@@ -752,9 +765,9 @@ func (manager *Manager) restoreServiceState(before RuntimeState, wasLoaded bool)
 	if !wasLoaded {
 		return nil
 	}
-	// RunAtLoad starts a freshly bootstrapped job. To restore the observable
-	// "loaded but stopped" state, let the old version become ready and then
-	// stop it cleanly while leaving the launchd job registered.
+	// Restore the observable "loaded but stopped" state by letting the old
+	// version become ready and then stopping it cleanly while leaving the
+	// launchd job registered. This works for either RunAtLoad policy.
 	timeout := manager.StartTimeout + manager.StopTimeout + 25*time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

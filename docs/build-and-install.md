@@ -309,7 +309,7 @@ sudo tun-proxy service install
 `~/.config/tun-proxy/config.yaml`，不会错误读取 `/var/root`。
 
 `service install` 会把用户配置复制到固定的托管目录，并安装 LaunchDaemon。托管服务
-不会直接从用户 home 读取运行配置。主要固定路径如下：
+不会直接从用户 home 读取运行配置。默认会立即启动，但不会设置开机自启。主要固定路径如下：
 
 | 用途 | 托管路径 |
 | --- | --- |
@@ -327,6 +327,15 @@ sudo tun-proxy service install -start=false
 sudo tun-proxy check -service
 sudo tun-proxy service start
 ```
+
+如需明确允许开机自启：
+
+```sh
+sudo tun-proxy service install -start-at-boot=true
+```
+
+`-start-at-boot=true` 还会启用 launchd 的异常退出自动重启。默认关闭时，plist 中的
+`RunAtLoad` 为 `false`，且不会包含会隐式触发开机运行的 `KeepAlive`。
 
 仅在首次安装或完整卸载后使用 `service install`。已经安装 LaunchDaemon 时使用升级命令。
 
@@ -424,6 +433,8 @@ sudo tun-proxy service upgrade \
 ```
 
 升级失败时会自动回滚到先前版本。不要直接覆盖 LaunchDaemon 正在使用的托管二进制。
+升级默认保留首次安装时选择的 `-start-at-boot` 策略；已有服务可通过
+`service upgrade -start-at-boot=true|false` 切换。
 
 ## 11. 卸载
 

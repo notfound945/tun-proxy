@@ -1,12 +1,58 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 )
+
+const flagOptionsMarker = "{{generated-options}}"
+
+func commandFlagSet(topic string, output io.Writer) (*flag.FlagSet, bool) {
+	switch topic {
+	case "config":
+		return newConfigFlagSet(output, nil), true
+	case "config validate":
+		return newConfigValidateFlagSet(output, nil), true
+	case "check":
+		return newCheckFlagSet(output, nil), true
+	case "explain":
+		return newExplainFlagSet(output, nil), true
+	case "diagnose":
+		return newDiagnoseFlagSet(output, nil), true
+	case "run":
+		return newRunFlagSet(output, nil), true
+	case "status":
+		return newStatusFlagSet(output, nil), true
+	case "cleanup":
+		return newCleanupFlagSet(output, nil), true
+	case "service install":
+		return newServiceInstallFlagSet(output, nil), true
+	case "service reload":
+		return newServiceReloadFlagSet(output, nil), true
+	case "service status":
+		return newServiceStatusFlagSet(output, nil), true
+	case "service logs":
+		return newServiceLogsFlagSet(output, nil), true
+	case "service upgrade":
+		return newServiceUpgradeFlagSet(output, nil), true
+	case "service uninstall":
+		return newServiceUninstallFlagSet(output, nil), true
+	default:
+		return nil, false
+	}
+}
+
+func newCommandFlagSet(topic string, output io.Writer) *flag.FlagSet {
+	flags := flag.NewFlagSet(topic, flag.ContinueOnError)
+	flags.SetOutput(output)
+	flags.Usage = func() { fprintUsage(flags.Output(), strings.Fields(topic)) }
+	return flags
+}
 
 var commandUsages = map[string]string{
 	"": `usage: tun-proxy <command> [options]
@@ -36,12 +82,7 @@ List current interfaces, flags, MTU, and assigned addresses.
   tun-proxy config -finder [-config PATH]
   tun-proxy config <command> [options]
 
-options:
-  -generate     write the embedded default configuration
-  -finder       reveal the selected configuration file in Finder
-  -config PATH  configuration to generate or reveal
-                (default: ~/.config/tun-proxy/config.yaml)
-  -force        overwrite an existing file when used with -generate
+{{generated-options}}
 
 commands:
   validate [-config PATH] [-service] [-json]
@@ -52,68 +93,43 @@ existing file unless -force is explicit. Finder reveal is read-only. Use
 `,
 	"config validate": `usage: tun-proxy config validate [options]
 
-options:
-  -config PATH  YAML configuration (default: ~/.config/tun-proxy/config.yaml)
-  -service      also enforce the fixed managed-service path contract
-  -json         print a machine-readable validation result
+{{generated-options}}
 
 This command parses and semantically validates YAML. It does not modify the
 host and does not require root. Use "tun-proxy check" for live host preflight.
 `,
 	"check": `usage: tun-proxy check [options]
 
-options:
-  -config PATH  YAML configuration (default: ~/.config/tun-proxy/config.yaml)
-  -service      validate installed split-privilege storage and prerequisites
+{{generated-options}}
 
 The live preflight checks root privileges, interfaces, routes, paths, and DNS
 listener availability. It does not start the proxy.
 `,
 	"explain": `usage: tun-proxy explain [options]
 
-options:
-  -config PATH       YAML configuration (default: ~/.config/tun-proxy/config.yaml)
-  -domain NAME       destination domain
-  -ip ADDRESS        resolved/literal address; repeat for multiple answers
-  -protocol tcp|udp  flow protocol (default: tcp)
-  -port PORT         destination port (default: 443)
-  -family ipv4|ipv6  address family used by -resolve (default: ipv4)
-  -resolve           query the configured interface-bound DNS upstreams
-  -timeout DURATION  DNS resolution timeout (default: 10s)
-  -json              print machine-readable output
+{{generated-options}}
 
 Without -ip or -resolve, explain is offline. CIDR rules may remain deferred
 until a real address is supplied.
 `,
 	"diagnose": `usage: tun-proxy diagnose [options]
 
-options:
-  -config PATH  configuration to inspect
-                (default: ~/.config/tun-proxy/config.yaml)
-  -state PATH   runtime recovery state
-  -hosts PATH   hosts file to scan (default: /etc/hosts)
-  -json         print the complete report as JSON
+{{generated-options}}
 
 Diagnose is read-only. Run it with sudo to inspect a root-owned managed state
 file and status socket; without sudo it still reports available checks.
 `,
 	"run": `usage: tun-proxy run [options]
 
-options:
-  -config PATH  YAML configuration (default: ~/.config/tun-proxy/config.yaml)
+{{generated-options}}
 `,
 	"status": `usage: tun-proxy status [options]
 
-options:
-  -state PATH  runtime state (default: /var/run/tun-proxy/state.json)
-  -json        print the complete runtime snapshot as JSON
+{{generated-options}}
 `,
 	"cleanup": `usage: tun-proxy cleanup [options]
 
-options:
-  -state PATH        runtime state (default: /var/run/tun-proxy/state.json)
-  -lock PATH         fallback stale lock path
-  -timeout DURATION  maximum cleanup duration (default: 30s)
+{{generated-options}}
 `,
 	"service": `usage: tun-proxy service <command> [options]
 
@@ -132,46 +148,33 @@ Run "tun-proxy help service <command>" for details.
 `,
 	"service install": `usage: tun-proxy service install [options]
 
-options:
-  -config PATH  configuration to install
-                (default: ~/.config/tun-proxy/config.yaml)
-  -binary PATH  binary to install (default: current executable)
-  -start BOOL   start after installation (default: true)
+{{generated-options}}
 `,
 	"service start":   "usage: tun-proxy service start\n",
 	"service stop":    "usage: tun-proxy service stop\n",
 	"service restart": "usage: tun-proxy service restart\n",
 	"service reload": `usage: tun-proxy service reload [options]
 
-options:
-  -timeout DURATION  wait for runtime confirmation (default: 15s)
+{{generated-options}}
 
 The installed configuration is re-read. Immutable changes are rejected and
 the current runtime remains active.
 `,
 	"service status": `usage: tun-proxy service status [options]
 
-options:
-  -json  print machine-readable output
+{{generated-options}}
 `,
 	"service logs": `usage: tun-proxy service logs [options]
 
-options:
-  -lines N                  number of trailing lines (default: 100)
-  -n N                      alias for -lines
-  -follow, -f               continue following appended data
-  -stream stdout|stderr|both  select managed log stream (default: both)
+{{generated-options}}
 `,
 	"service upgrade": `usage: tun-proxy service upgrade [options]
 
-options:
-  -binary PATH  replacement binary (default: current executable)
-  -config PATH  optional replacement configuration
+{{generated-options}}
 `,
 	"service uninstall": `usage: tun-proxy service uninstall [options]
 
-options:
-  -purge  also remove installed config, mappings, and logs
+{{generated-options}}
 `,
 	"version": "usage: tun-proxy version\n",
 }
@@ -190,9 +193,16 @@ func helpCommand(args []string) error {
 }
 
 func fprintUsage(writer io.Writer, topic []string) {
-	text, ok := commandUsages[strings.Join(topic, " ")]
+	name := strings.Join(topic, " ")
+	text, ok := commandUsages[name]
 	if !ok {
 		text = commandUsages[""]
+	}
+	var generated bytes.Buffer
+	if flags, hasFlags := commandFlagSet(name, &generated); hasFlags {
+		_, _ = io.WriteString(&generated, "options:\n")
+		flags.PrintDefaults()
+		text = strings.Replace(text, flagOptionsMarker, strings.TrimRight(generated.String(), "\n"), 1)
 	}
 	_, _ = io.WriteString(writer, text)
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,18 +92,27 @@ func hasOnlyHelpArgument(args []string) bool {
 	return len(args) == 1 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help")
 }
 
+type serviceReloadOptions struct{ timeout time.Duration }
+
+func newServiceReloadFlagSet(output io.Writer, options *serviceReloadOptions) *flag.FlagSet {
+	if options == nil {
+		options = &serviceReloadOptions{}
+	}
+	flags := newCommandFlagSet("service reload", output)
+	flags.DurationVar(&options.timeout, "timeout", 15*time.Second, "wait `DURATION` for runtime confirmation")
+	return flags
+}
+
 func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, args []string) error {
-	flags := flag.NewFlagSet("service reload", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	flags.Usage = func() { fprintUsage(flags.Output(), []string{"service", "reload"}) }
-	timeout := flags.Duration("timeout", 15*time.Second, "wait for runtime confirmation")
+	options := serviceReloadOptions{}
+	flags := newServiceReloadFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("service reload received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if *timeout <= 0 {
+	if options.timeout <= 0 {
 		return errors.New("service reload timeout must be positive")
 	}
 	state, err := system.ReadState(manager.Layout.State)
@@ -119,7 +129,7 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 	if err := manager.Reload(ctx); err != nil {
 		return err
 	}
-	after, err := waitForServiceReload(ctx, state.StatusSocket, before, *timeout)
+	after, err := waitForServiceReload(ctx, state.StatusSocket, before, options.timeout)
 	if err != nil {
 		return err
 	}
@@ -172,29 +182,46 @@ func waitForServiceReloadWithQuery(
 	}
 }
 
+type serviceInstallOptions struct {
+	configPath  string
+	binaryPath  string
+	start       bool
+	startAtBoot bool
+}
+
+func newServiceInstallFlagSet(output io.Writer, options *serviceInstallOptions) *flag.FlagSet {
+	if options == nil {
+		options = &serviceInstallOptions{}
+	}
+	flags := newCommandFlagSet("service install", output)
+	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "configuration `PATH` to install")
+	flags.StringVar(&options.binaryPath, "binary", "", "tun-proxy binary `PATH` to install (default: current executable)")
+	flags.BoolVar(&options.start, "start", true, "start after installation")
+	flags.BoolVar(&options.startAtBoot, "start-at-boot", false, "start automatically at system boot")
+	return flags
+}
+
 func serviceInstallCommand(ctx context.Context, manager *launchservice.Manager, args []string) error {
-	flags := flag.NewFlagSet("service install", flag.ContinueOnError)
-	configPath := flags.String("config", defaultUserConfigPath(), "configuration to install")
-	binaryPath := flags.String("binary", "", "tun-proxy binary to install (default: current executable)")
-	start := flags.Bool("start", true, "start the service after installation")
+	options := serviceInstallOptions{}
+	flags := newServiceInstallFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("service install received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	configSource, err := validateConfigSource(*configPath)
+	configSource, err := validateConfigSource(options.configPath)
 	if err != nil {
 		return err
 	}
-	binarySource, err := serviceBinarySource(*binaryPath)
+	binarySource, err := serviceBinarySource(options.binaryPath)
 	if err != nil {
 		return err
 	}
-	if err := manager.Install(ctx, binarySource, configSource, *start); err != nil {
+	if err := manager.Install(ctx, binarySource, configSource, options.start, options.startAtBoot); err != nil {
 		return err
 	}
-	if *start {
+	if options.start {
 		fmt.Println("tun-proxy service installed and started")
 	} else {
 		fmt.Println("tun-proxy service installed")
@@ -202,9 +229,20 @@ func serviceInstallCommand(ctx context.Context, manager *launchservice.Manager, 
 	return nil
 }
 
+type serviceStatusOptions struct{ jsonOutput bool }
+
+func newServiceStatusFlagSet(output io.Writer, options *serviceStatusOptions) *flag.FlagSet {
+	if options == nil {
+		options = &serviceStatusOptions{}
+	}
+	flags := newCommandFlagSet("service status", output)
+	flags.BoolVar(&options.jsonOutput, "json", false, "print service status as JSON")
+	return flags
+}
+
 func serviceStatusCommand(ctx context.Context, manager *launchservice.Manager, args []string) error {
-	flags := flag.NewFlagSet("service status", flag.ContinueOnError)
-	jsonOutput := flags.Bool("json", false, "print service status as JSON")
+	options := serviceStatusOptions{}
+	flags := newServiceStatusFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -215,7 +253,7 @@ func serviceStatusCommand(ctx context.Context, manager *launchservice.Manager, a
 	if err != nil {
 		return err
 	}
-	if *jsonOutput {
+	if options.jsonOutput {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(status)
@@ -225,47 +263,82 @@ func serviceStatusCommand(ctx context.Context, manager *launchservice.Manager, a
 	return nil
 }
 
+type serviceUpgradeOptions struct {
+	binaryPath       string
+	configPath       string
+	startAtBootValue string
+}
+
+func newServiceUpgradeFlagSet(output io.Writer, options *serviceUpgradeOptions) *flag.FlagSet {
+	if options == nil {
+		options = &serviceUpgradeOptions{}
+	}
+	flags := newCommandFlagSet("service upgrade", output)
+	flags.StringVar(&options.binaryPath, "binary", "", "replacement binary `PATH` (default: current executable)")
+	flags.StringVar(&options.configPath, "config", "", "optional replacement configuration `PATH`")
+	flags.StringVar(&options.startAtBootValue, "start-at-boot", "", "optional boot startup `BOOL` (true or false; default: preserve current)")
+	return flags
+}
+
 func serviceUpgradeCommand(ctx context.Context, manager *launchservice.Manager, args []string) error {
-	flags := flag.NewFlagSet("service upgrade", flag.ContinueOnError)
-	binaryPath := flags.String("binary", "", "replacement binary (default: current executable)")
-	configPath := flags.String("config", "", "optional replacement configuration")
+	options := serviceUpgradeOptions{}
+	flags := newServiceUpgradeFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("service upgrade received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	binarySource, err := serviceBinarySource(*binaryPath)
+	binarySource, err := serviceBinarySource(options.binaryPath)
 	if err != nil {
 		return err
 	}
 	configSource := ""
-	if *configPath != "" {
-		configSource, err = validateConfigSource(*configPath)
+	if options.configPath != "" {
+		configSource, err = validateConfigSource(options.configPath)
 		if err != nil {
 			return err
 		}
 	}
-	if err := manager.Upgrade(ctx, binarySource, configSource); err != nil {
+	var startAtBoot *bool
+	if options.startAtBootValue != "" {
+		value, err := strconv.ParseBool(options.startAtBootValue)
+		if err != nil {
+			return fmt.Errorf("service upgrade start-at-boot must be true or false, got %q", options.startAtBootValue)
+		}
+		startAtBoot = &value
+	}
+	if err := manager.Upgrade(ctx, binarySource, configSource, startAtBoot); err != nil {
 		return err
 	}
 	fmt.Println("tun-proxy service upgraded")
 	return nil
 }
 
+type serviceUninstallOptions struct{ purge bool }
+
+func newServiceUninstallFlagSet(output io.Writer, options *serviceUninstallOptions) *flag.FlagSet {
+	if options == nil {
+		options = &serviceUninstallOptions{}
+	}
+	flags := newCommandFlagSet("service uninstall", output)
+	flags.BoolVar(&options.purge, "purge", false, "also remove installed config, mappings, and logs")
+	return flags
+}
+
 func serviceUninstallCommand(ctx context.Context, manager *launchservice.Manager, args []string) error {
-	flags := flag.NewFlagSet("service uninstall", flag.ContinueOnError)
-	purge := flags.Bool("purge", false, "also remove installed config, mappings, and logs")
+	options := serviceUninstallOptions{}
+	flags := newServiceUninstallFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("service uninstall received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if err := manager.Uninstall(ctx, *purge); err != nil {
+	if err := manager.Uninstall(ctx, options.purge); err != nil {
 		return err
 	}
-	if *purge {
+	if options.purge {
 		fmt.Println("tun-proxy service uninstalled and managed data purged")
 	} else {
 		fmt.Println("tun-proxy service uninstalled; config, mappings, and logs preserved")

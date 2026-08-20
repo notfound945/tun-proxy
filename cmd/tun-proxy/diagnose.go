@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -85,14 +86,28 @@ type diagnosisOptions struct {
 	HostsPath  string
 }
 
+type diagnoseCLIOptions struct {
+	configPath string
+	statePath  string
+	hostsPath  string
+	jsonOutput bool
+}
+
+func newDiagnoseFlagSet(output io.Writer, options *diagnoseCLIOptions) *flag.FlagSet {
+	if options == nil {
+		options = &diagnoseCLIOptions{}
+	}
+	flags := newCommandFlagSet("diagnose", output)
+	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "configuration `PATH` to inspect")
+	flags.StringVar(&options.statePath, "state", launchservice.DefaultLayout().State, "runtime recovery state `PATH`")
+	flags.StringVar(&options.hostsPath, "hosts", "/etc/hosts", "hosts file `PATH` to scan")
+	flags.BoolVar(&options.jsonOutput, "json", false, "print complete report as JSON")
+	return flags
+}
+
 func diagnoseCommand(args []string) error {
-	flags := flag.NewFlagSet("diagnose", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	flags.Usage = func() { fprintUsage(flags.Output(), []string{"diagnose"}) }
-	configPath := flags.String("config", defaultUserConfigPath(), "configuration to inspect")
-	statePath := flags.String("state", launchservice.DefaultLayout().State, "runtime recovery state")
-	hostsPath := flags.String("hosts", "/etc/hosts", "hosts file to scan")
-	jsonOutput := flags.Bool("json", false, "print complete report as JSON")
+	options := diagnoseCLIOptions{}
+	flags := newDiagnoseFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -100,9 +115,9 @@ func diagnoseCommand(args []string) error {
 		return fmt.Errorf("diagnose received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
 	report := collectDiagnosis(context.Background(), diagnosisOptions{
-		ConfigPath: *configPath, StatePath: *statePath, HostsPath: *hostsPath,
+		ConfigPath: options.configPath, StatePath: options.statePath, HostsPath: options.hostsPath,
 	})
-	if *jsonOutput {
+	if options.jsonOutput {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(report)

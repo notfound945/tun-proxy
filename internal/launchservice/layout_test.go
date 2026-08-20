@@ -10,9 +10,9 @@ import (
 	"github.com/hailinpan/tun-proxy/internal/config"
 )
 
-func TestManifestUsesFixedProgramArgumentsAndFailureRestart(t *testing.T) {
+func TestManifestUsesFixedProgramArgumentsWithoutBootStartByDefault(t *testing.T) {
 	layout := testLayout(t)
-	contents, err := Manifest(layout)
+	contents, err := Manifest(layout, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,8 +31,7 @@ func TestManifestUsesFixedProgramArgumentsAndFailureRestart(t *testing.T) {
 		"<string>_service-run</string>",
 		"<string>-config</string>",
 		"<string>" + layout.Config + "</string>",
-		"<key>RunAtLoad</key>\n  <true/>",
-		"<key>SuccessfulExit</key>\n    <false/>",
+		"<key>RunAtLoad</key>\n  <false/>",
 		"<key>ExitTimeOut</key>\n  <integer>45</integer>",
 		"<key>Umask</key>\n  <integer>23</integer>",
 		layout.StandardOut,
@@ -44,6 +43,50 @@ func TestManifestUsesFixedProgramArgumentsAndFailureRestart(t *testing.T) {
 	}
 	if strings.Contains(text, "<key>Program</key>") || strings.Contains(text, "/bin/sh") {
 		t.Fatal("manifest must not invoke a shell")
+	}
+	if strings.Contains(text, "<key>KeepAlive</key>") {
+		t.Fatal("manifest with boot startup disabled must not contain implicit KeepAlive startup")
+	}
+}
+
+func TestManifestEnablesBootStartAndFailureRestartWhenRequested(t *testing.T) {
+	layout := testLayout(t)
+	contents, err := Manifest(layout, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, required := range []string{
+		"<key>RunAtLoad</key>\n  <true/>",
+		"<key>KeepAlive</key>",
+		"<key>SuccessfulExit</key>\n    <false/>",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("boot-start manifest missing %q", required)
+		}
+	}
+}
+
+func TestManifestStartAtBootReadsGeneratedPolicy(t *testing.T) {
+	layout := testLayout(t)
+	for _, want := range []bool{false, true} {
+		contents, err := Manifest(layout, want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := ManifestStartAtBoot(contents)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("ManifestStartAtBoot() = %t, want %t", got, want)
+		}
+	}
+}
+
+func TestManifestStartAtBootRejectsMissingPolicy(t *testing.T) {
+	if _, err := ManifestStartAtBoot([]byte("<plist><dict/></plist>")); err == nil {
+		t.Fatal("manifest without RunAtLoad was accepted")
 	}
 }
 

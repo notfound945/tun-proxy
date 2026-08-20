@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"strings"
@@ -82,61 +83,79 @@ type explainResult struct {
 	Note               string           `json:"note,omitempty"`
 }
 
+type explainOptions struct {
+	configPath string
+	domain     string
+	protocol   string
+	port       int
+	family     string
+	resolve    bool
+	timeout    time.Duration
+	jsonOutput bool
+	addresses  addressList
+}
+
+func newExplainFlagSet(output io.Writer, options *explainOptions) *flag.FlagSet {
+	if options == nil {
+		options = &explainOptions{}
+	}
+	flags := newCommandFlagSet("explain", output)
+	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "YAML configuration `PATH`")
+	flags.StringVar(&options.domain, "domain", "", "destination `NAME`")
+	flags.StringVar(&options.protocol, "protocol", "tcp", "flow `PROTOCOL` (tcp or udp)")
+	flags.IntVar(&options.port, "port", 443, "destination `PORT`")
+	flags.StringVar(&options.family, "family", "ipv4", "resolution `FAMILY` (ipv4 or ipv6)")
+	flags.BoolVar(&options.resolve, "resolve", false, "resolve through configured interface-bound DNS")
+	flags.DurationVar(&options.timeout, "timeout", 10*time.Second, "DNS resolution `DURATION`")
+	flags.BoolVar(&options.jsonOutput, "json", false, "print explanation as JSON")
+	flags.Var(&options.addresses, "ip", "resolved or literal `ADDRESS` (repeatable)")
+	return flags
+}
+
 func explainCommand(args []string) error {
-	flags := flag.NewFlagSet("explain", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	flags.Usage = func() { fprintUsage(flags.Output(), []string{"explain"}) }
-	configPath := flags.String("config", defaultUserConfigPath(), "path to YAML configuration")
-	domain := flags.String("domain", "", "destination domain")
-	protocol := flags.String("protocol", "tcp", "flow protocol")
-	port := flags.Int("port", 443, "destination port")
-	family := flags.String("family", "ipv4", "resolution address family")
-	resolve := flags.Bool("resolve", false, "resolve through configured interface-bound DNS")
-	timeout := flags.Duration("timeout", 10*time.Second, "DNS resolution timeout")
-	jsonOutput := flags.Bool("json", false, "print explanation as JSON")
-	var addresses addressList
-	flags.Var(&addresses, "ip", "resolved or literal address (repeatable)")
+	options := explainOptions{}
+	flags := newExplainFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("explain received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if *domain == "" && len(addresses) == 0 {
+	if options.domain == "" && len(options.addresses) == 0 {
 		return errors.New("explain requires -domain or at least one -ip")
 	}
-	*protocol = strings.ToLower(*protocol)
-	if *protocol != "tcp" && *protocol != "udp" {
-		return fmt.Errorf("protocol must be tcp or udp, got %q", *protocol)
+	options.protocol = strings.ToLower(options.protocol)
+	if options.protocol != "tcp" && options.protocol != "udp" {
+		return fmt.Errorf("protocol must be tcp or udp, got %q", options.protocol)
 	}
-	if *port < 1 || *port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535, got %d", *port)
+	if options.port < 1 || options.port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", options.port)
 	}
-	*family = strings.ToLower(*family)
-	if *family != "ipv4" && *family != "ipv6" {
-		return fmt.Errorf("family must be ipv4 or ipv6, got %q", *family)
+	options.family = strings.ToLower(options.family)
+	if options.family != "ipv4" && options.family != "ipv6" {
+		return fmt.Errorf("family must be ipv4 or ipv6, got %q", options.family)
 	}
-	if *resolve && len(addresses) != 0 {
+	if options.resolve && len(options.addresses) != 0 {
 		return errors.New("-resolve and -ip cannot be used together")
 	}
-	if *resolve && *domain == "" {
+	if options.resolve && options.domain == "" {
 		return errors.New("-resolve requires -domain")
 	}
-	if *timeout <= 0 {
+	if options.timeout <= 0 {
 		return errors.New("timeout must be positive")
 	}
 
-	runtime, err := config.LoadFile(*configPath)
+	runtime, err := config.LoadFile(options.configPath)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), options.timeout)
 	defer cancel()
-	result, err := explainFlow(ctx, runtime, *configPath, *domain, addresses, *protocol, uint16(*port), *family, *resolve, *timeout)
+	result, err := explainFlow(ctx, runtime, options.configPath, options.domain, options.addresses, options.protocol, uint16(options.port), options.family, options.resolve, options.timeout)
 	if err != nil {
 		return err
 	}
-	if *jsonOutput {
+	if options.jsonOutput {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)

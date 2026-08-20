@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"io"
 	"strings"
 	"testing"
 )
@@ -16,14 +18,17 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 			t.Fatalf("top-level help missing %q:\n%s", command, output.String())
 		}
 	}
-	if usage := commandUsages["config"]; !strings.Contains(usage, "-finder") {
+	if usage := renderedUsage("config"); !strings.Contains(usage, "-finder") {
 		t.Fatalf("config help missing Finder flag: %s", usage)
 	}
 	if !strings.Contains(output.String(), "-version") {
 		t.Fatalf("top-level help missing version flag:\n%s", output.String())
 	}
-	if usage := commandUsages["cleanup"]; !strings.Contains(usage, "-timeout DURATION") {
+	if usage := renderedUsage("cleanup"); !strings.Contains(usage, "-timeout DURATION") {
 		t.Fatalf("cleanup help missing timeout flag: %s", usage)
+	}
+	if usage := renderedUsage("service install"); !strings.Contains(usage, "-start-at-boot") {
+		t.Fatalf("service install help missing boot-start flag: %s", usage)
 	}
 
 	for _, topic := range []string{
@@ -35,10 +40,32 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 		"service reload",
 		"service logs",
 	} {
-		usage, ok := commandUsages[topic]
-		if !ok || !strings.Contains(usage, "usage: tun-proxy "+topic) {
+		usage := renderedUsage(topic)
+		if !strings.Contains(usage, "usage: tun-proxy "+topic) {
 			t.Fatalf("help topic %q is missing or malformed: %q", topic, usage)
 		}
+	}
+}
+
+func TestGeneratedHelpContainsEveryCommandFlag(t *testing.T) {
+	for topic, template := range commandUsages {
+		flags, hasFlags := commandFlagSet(topic, io.Discard)
+		hasMarker := strings.Contains(template, flagOptionsMarker)
+		if hasFlags != hasMarker {
+			t.Fatalf("help topic %q flag set=%t marker=%t", topic, hasFlags, hasMarker)
+		}
+		if !hasFlags {
+			continue
+		}
+		usage := renderedUsage(topic)
+		if strings.Contains(usage, flagOptionsMarker) {
+			t.Fatalf("help topic %q retained generated-options marker", topic)
+		}
+		flags.VisitAll(func(item *flag.Flag) {
+			if !usageContainsFlag(usage, item.Name) {
+				t.Errorf("help topic %q missing registered flag -%s", topic, item.Name)
+			}
+		})
 	}
 }
 
@@ -52,4 +79,20 @@ func TestServiceRestartHelpAlias(t *testing.T) {
 	if err := serviceCommand([]string{"restart", "-h"}); err != nil {
 		t.Fatalf("service restart -h error = %v", err)
 	}
+}
+
+func renderedUsage(topic string) string {
+	var output bytes.Buffer
+	fprintUsage(&output, strings.Fields(topic))
+	return output.String()
+}
+
+func usageContainsFlag(usage, name string) bool {
+	for _, line := range strings.Split(usage, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 0 && fields[0] == "-"+name {
+			return true
+		}
+	}
+	return false
 }

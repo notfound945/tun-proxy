@@ -131,7 +131,13 @@ sudo tun-proxy service status
 ```
 
 CLI 默认读取 `~/.config/tun-proxy/config.yaml`。`service install` 会把该用户配置事务性
-安装到托管服务的固定目录并启动服务。安装后可以在 Finder 中显示用户配置，或控制服务：
+安装到托管服务的固定目录并立即启动服务，但默认不会设置开机自启。如需允许开机自启，使用：
+
+```sh
+sudo tun-proxy service install -start-at-boot=true
+```
+
+安装后可以在 Finder 中显示用户配置，或控制服务：
 
 ```sh
 tun-proxy config -finder

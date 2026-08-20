@@ -99,23 +99,37 @@ func runWithVersionOutput(args []string, versionOutput io.Writer) error {
 	}
 }
 
+type checkOptions struct {
+	configPath string
+	service    bool
+}
+
+func newCheckFlagSet(output io.Writer, options *checkOptions) *flag.FlagSet {
+	if options == nil {
+		options = &checkOptions{}
+	}
+	flags := newCommandFlagSet("check", output)
+	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "`PATH` to YAML configuration")
+	flags.BoolVar(&options.service, "service", false, "validate the installed split-privilege service layout")
+	return flags
+}
+
 func checkCommand(args []string) error {
-	flags := flag.NewFlagSet("check", flag.ContinueOnError)
-	path := flags.String("config", defaultUserConfigPath(), "path to YAML configuration")
-	service := flags.Bool("service", false, "validate the installed split-privilege service layout")
+	options := checkOptions{}
+	flags := newCheckFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("check received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	runtime, err := config.LoadFile(*path)
+	runtime, err := config.LoadFile(options.configPath)
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
 	var preflightErr error
-	if *service {
+	if options.service {
 		layout := launchservice.DefaultLayout()
 		if err := launchservice.ValidateManagedConfig(runtime, layout); err != nil {
 			return fmt.Errorf("managed service configuration: %w", err)
@@ -141,16 +155,27 @@ func checkCommand(args []string) error {
 	return nil
 }
 
+type runOptions struct{ configPath string }
+
+func newRunFlagSet(output io.Writer, options *runOptions) *flag.FlagSet {
+	if options == nil {
+		options = &runOptions{}
+	}
+	flags := newCommandFlagSet("run", output)
+	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "`PATH` to YAML configuration")
+	return flags
+}
+
 func runCommand(args []string) error {
-	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	path := flags.String("config", defaultUserConfigPath(), "path to YAML configuration")
+	options := runOptions{}
+	flags := newRunFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("run received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	return runConfigured(*path, false)
+	return runConfigured(options.configPath, false)
 }
 
 func runConfigured(path string, managed bool) error {
@@ -214,17 +239,31 @@ func runConfigured(path string, managed bool) error {
 	return nil
 }
 
+type statusOptions struct {
+	statePath  string
+	jsonOutput bool
+}
+
+func newStatusFlagSet(output io.Writer, options *statusOptions) *flag.FlagSet {
+	if options == nil {
+		options = &statusOptions{}
+	}
+	flags := newCommandFlagSet("status", output)
+	flags.StringVar(&options.statePath, "state", "/var/run/tun-proxy/state.json", "runtime state `PATH`")
+	flags.BoolVar(&options.jsonOutput, "json", false, "print the complete runtime snapshot as JSON")
+	return flags
+}
+
 func statusCommand(args []string) error {
-	flags := flag.NewFlagSet("status", flag.ContinueOnError)
-	path := flags.String("state", "/var/run/tun-proxy/state.json", "path to runtime state")
-	jsonOutput := flags.Bool("json", false, "print the complete runtime snapshot as JSON")
+	options := statusOptions{}
+	flags := newStatusFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("status received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	state, err := system.ReadState(*path)
+	state, err := system.ReadState(options.statePath)
 	if errors.Is(err, os.ErrNotExist) {
 		fmt.Println("tun-proxy is stopped (no state file)")
 		return nil
@@ -235,7 +274,7 @@ func statusCommand(args []string) error {
 	processErr := unix.Kill(state.PID, 0)
 	alive := processErr == nil || errors.Is(processErr, unix.EPERM)
 	if !alive || state.StatusSocket == "" {
-		if *jsonOutput {
+		if options.jsonOutput {
 			encoder := json.NewEncoder(os.Stdout)
 			encoder.SetIndent("", "  ")
 			return encoder.Encode(state)
@@ -247,7 +286,7 @@ func statusCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *jsonOutput {
+	if options.jsonOutput {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(snapshot)
@@ -272,25 +311,40 @@ func statusCommand(args []string) error {
 	return nil
 }
 
+type cleanupOptions struct {
+	statePath string
+	lockPath  string
+	timeout   time.Duration
+}
+
+func newCleanupFlagSet(output io.Writer, options *cleanupOptions) *flag.FlagSet {
+	if options == nil {
+		options = &cleanupOptions{}
+	}
+	flags := newCommandFlagSet("cleanup", output)
+	flags.StringVar(&options.statePath, "state", "/var/run/tun-proxy/state.json", "runtime state `PATH`")
+	flags.StringVar(&options.lockPath, "lock", "/var/run/tun-proxy/tun-proxy.lock", "fallback stale lock `PATH`")
+	flags.DurationVar(&options.timeout, "timeout", cleanupCommandTimeout, "maximum cleanup `DURATION`")
+	return flags
+}
+
 func cleanupCommand(args []string) error {
-	flags := flag.NewFlagSet("cleanup", flag.ContinueOnError)
-	statePath := flags.String("state", "/var/run/tun-proxy/state.json", "path to runtime state")
-	lockPath := flags.String("lock", "/var/run/tun-proxy/tun-proxy.lock", "fallback path to stale process lock")
-	timeout := flags.Duration("timeout", cleanupCommandTimeout, "maximum cleanup duration")
+	options := cleanupOptions{}
+	flags := newCleanupFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("cleanup received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if *timeout <= 0 {
+	if options.timeout <= 0 {
 		return errors.New("cleanup timeout must be positive")
 	}
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, unix.SIGTERM)
 	defer stop()
-	cleanupCtx, cancel := context.WithTimeout(signalCtx, *timeout)
+	cleanupCtx, cancel := context.WithTimeout(signalCtx, options.timeout)
 	defer cancel()
-	if err := app.Cleanup(cleanupCtx, *statePath, *lockPath); err != nil {
+	if err := app.Cleanup(cleanupCtx, options.statePath, options.lockPath); err != nil {
 		return err
 	}
 	fmt.Println("cleanup complete")

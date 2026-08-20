@@ -257,6 +257,7 @@ sudo tun-proxy service install \
   -config "$HOME/.config/tun-proxy/config.yaml" \
   -binary ./bin/tun-proxy
 sudo tun-proxy service install -start=false
+sudo tun-proxy service install -start-at-boot=true
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -264,8 +265,11 @@ sudo tun-proxy service install -start=false
 | `-config PATH` | `~/.config/tun-proxy/config.yaml` | 要安装的配置。通过 `sudo` 执行时优先使用 `SUDO_USER` 的 home。 |
 | `-binary PATH` | 当前可执行文件 | 要安装的二进制文件。 |
 | `-start BOOL` | `true` | 安装后启动服务；使用 `-start=false` 可只安装不启动。 |
+| `-start-at-boot BOOL` | `false` | 是否允许 macOS 开机加载时自动启动服务。 |
 
-安装过程是事务性的。使用默认值 `-start=true` 时，安装成功后还会等待服务就绪。
+安装过程是事务性的。使用默认值 `-start=true` 时，安装成功后还会等待服务就绪，但默认
+不会配置开机自启。`-start-at-boot=true` 同时启用 launchd 的异常退出自动重启；默认关闭
+时不会写入隐式触发开机运行的 `KeepAlive`。
 
 ### `service start`
 
@@ -345,14 +349,17 @@ sudo tun-proxy service upgrade -binary ./bin/tun-proxy
 sudo tun-proxy service upgrade \
   -binary ./bin/tun-proxy \
   -config "$HOME/.config/tun-proxy/config.yaml"
+sudo tun-proxy service upgrade -start-at-boot=false
 ```
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `-binary PATH` | 当前可执行文件 | 替换用二进制文件。 |
 | `-config PATH` | 不替换 | 可选的替换配置。 |
+| `-start-at-boot BOOL` | 保留当前设置 | 可选的开机自启策略变更。 |
 
-升级会以事务方式替换指定文件。如果新服务未能就绪，则自动回滚。
+升级会以事务方式替换指定文件。默认保留已安装 plist 的开机自启策略；显式传入
+`-start-at-boot=true` 或 `false` 可切换。如果新服务未能就绪，则自动回滚。
 
 ### `service uninstall`
 
