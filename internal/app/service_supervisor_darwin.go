@@ -386,7 +386,6 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 					continue
 				}
 			}
-			effectiveRuntime = nextEffective
 			interfaceServers = nextInterfaceServers
 			if dnsChanged {
 				for _, message := range effectiveDNSMessages(runtime, interfaceServers) {

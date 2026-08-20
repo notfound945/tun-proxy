@@ -283,10 +283,6 @@ func routeDefaultLookupArgs(ipv6 bool) []string {
 	return append(args, "default")
 }
 
-func routeMutationArgs(operation string, prefix netip.Prefix, interfaceName string) []string {
-	return routeStateMutationArgs(operation, prefix, interfaceName, netip.Addr{}, "")
-}
-
 func routeStateMutationArgs(operation string, prefix netip.Prefix, interfaceName string, gateway netip.Addr, scope string) []string {
 	args := []string{"-n", operation}
 	if prefix.Addr().Is6() {

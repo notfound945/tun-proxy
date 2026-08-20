@@ -435,9 +435,6 @@ func usableCapacity(prefix netip.Prefix, reserveFirst int) (uint64, error) {
 		return math.MaxUint64, nil
 	}
 	if hostBits == 64 {
-		if reserved >= math.MaxUint64 {
-			return 0, errors.New("reservations consume prefix")
-		}
 		return math.MaxUint64 - uint64(reserveFirst), nil
 	}
 	total := uint64(1) << uint(hostBits)

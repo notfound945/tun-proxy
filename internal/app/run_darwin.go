@@ -496,7 +496,6 @@ func Run(ctx context.Context, runtime *config.Config, configDigest string, optio
 				continue
 			}
 			dnsChanged := !sameInterfaceDNS(interfaceServers, nextInterfaceServers)
-			effectiveRuntime = nextEffective
 			interfaceServers = nextInterfaceServers
 			if dnsChanged {
 				for _, message := range effectiveDNSMessages(runtime, interfaceServers) {
