@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -307,12 +308,28 @@ func serviceRunCommand(args []string) error {
 	return app.RunServiceSupervisor(ctx, *path, layout, app.ServiceSupervisorOptions{
 		Reload: reload,
 		Ready: func(tunName string) {
-			fmt.Printf("tun-proxy service running tun=%s\n", tunName)
+			writeManagedServiceLog(os.Stdout, time.Now(), fmt.Sprintf("tun-proxy service running tun=%s", tunName))
 		},
 		Event: func(level, message string) {
-			fmt.Printf("%s %s\n", strings.ToUpper(level), message)
+			writeManagedServiceLog(os.Stdout, time.Now(), fmt.Sprintf("%s %s", strings.ToUpper(level), message))
 		},
 	})
+}
+
+const managedServiceTimestampLayout = "2006-01-02T15:04:05.000-07:00"
+
+// writeManagedServiceLog prefixes every physical log line with a local RFC 3339
+// timestamp. Building the complete payload before writing also keeps multi-line
+// errors from interleaving with concurrent supervisor output.
+func writeManagedServiceLog(output io.Writer, now time.Time, message string) {
+	timestamp := now.Local().Format(managedServiceTimestampLayout)
+	message = strings.TrimSuffix(message, "\n")
+	lines := strings.Split(message, "\n")
+	var payload strings.Builder
+	for _, line := range lines {
+		fmt.Fprintf(&payload, "%s %s\n", timestamp, line)
+	}
+	_, _ = io.WriteString(output, payload.String())
 }
 
 func serviceWorkerCommand(args []string) error {

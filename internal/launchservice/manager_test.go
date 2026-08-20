@@ -89,6 +89,16 @@ func (runner *fakeRunner) Run(_ context.Context, executable string, args ...stri
 	return nil, nil
 }
 
+func TestManagerUsesSixtySecondStartTimeout(t *testing.T) {
+	manager := NewManager(DefaultLayout())
+	if manager.StartTimeout != 60*time.Second {
+		t.Fatalf("StartTimeout = %s, want 1m0s", manager.StartTimeout)
+	}
+	if serviceCommandTimeout != 60*time.Second {
+		t.Fatalf("serviceCommandTimeout = %s, want 1m0s", serviceCommandTimeout)
+	}
+}
+
 func TestInstallCreatesArtifactsAndStarts(t *testing.T) {
 	layout := testLayout(t)
 	binarySource := filepath.Join(filepath.Dir(layout.Binary), "../source-binary")

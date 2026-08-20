@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hailinpan/tun-proxy/internal/privsep"
 )
@@ -95,5 +97,29 @@ func TestServiceWorkerInvocationRejectsWrongCurrentIdentity(t *testing.T) {
 	)
 	if !errors.Is(err, want) {
 		t.Fatalf("validateServiceWorkerInvocation() error = %v, want %v", err, want)
+	}
+}
+
+func TestWriteManagedServiceLogPrefixesEveryLineWithLocalTimestamp(t *testing.T) {
+	now := time.Date(2026, time.August, 20, 18, 7, 6, 123456789, time.Local)
+	var output bytes.Buffer
+	writeManagedServiceLog(&output, now, "first line\nsecond line\n")
+	want := "2026-08-20T18:07:06.123" + now.Format("-07:00") + " first line\n" +
+		"2026-08-20T18:07:06.123" + now.Format("-07:00") + " second line\n"
+	if got := output.String(); got != want {
+		t.Fatalf("managed service log = %q, want %q", got, want)
+	}
+}
+
+func TestManagedServiceProcessDetection(t *testing.T) {
+	for _, args := range [][]string{{"_service-run"}, {"_service-worker"}} {
+		if !isManagedServiceProcess(args) {
+			t.Fatalf("isManagedServiceProcess(%q) = false", args)
+		}
+	}
+	for _, args := range [][]string{nil, {"service", "start"}, {"run"}} {
+		if isManagedServiceProcess(args) {
+			t.Fatalf("isManagedServiceProcess(%q) = true", args)
+		}
 	}
 }

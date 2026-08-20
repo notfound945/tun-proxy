@@ -21,6 +21,8 @@ import (
 const launchctlPath = "/bin/launchctl"
 const maxCommandOutput = 64 << 10
 
+const serviceCommandTimeout = 60 * time.Second
+
 const (
 	InstallCommand   = "sudo tun-proxy service install"
 	StartCommand     = "sudo tun-proxy service start"
@@ -70,7 +72,7 @@ func (output *limitedBuffer) String() string {
 }
 
 func (nativeRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	commandCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	commandCtx, cancel := context.WithTimeout(ctx, serviceCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(commandCtx, executable, args...)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "LANG=C"}
@@ -116,7 +118,7 @@ func NewManager(layout Layout) *Manager {
 	runner := nativeRunner{}
 	manager := &Manager{
 		Layout: layout, Runner: runner, Accounts: newWorkerAccounts(runner), EffectiveUID: os.Geteuid, OwnerUID: 0,
-		PollInterval: 100 * time.Millisecond, StartTimeout: 20 * time.Second,
+		PollInterval: 100 * time.Millisecond, StartTimeout: 60 * time.Second,
 		StopTimeout: 50 * time.Second,
 	}
 	manager.Probe = manager.probeRuntime

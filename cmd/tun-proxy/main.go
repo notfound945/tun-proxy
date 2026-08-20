@@ -34,9 +34,17 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		fmt.Fprintln(os.Stderr, "error:", err)
+		if isManagedServiceProcess(os.Args[1:]) {
+			writeManagedServiceLog(os.Stderr, time.Now(), "ERROR "+err.Error())
+		} else {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		}
 		os.Exit(1)
 	}
+}
+
+func isManagedServiceProcess(args []string) bool {
+	return len(args) > 0 && (args[0] == "_service-run" || args[0] == "_service-worker")
 }
 
 func run(args []string) error {
