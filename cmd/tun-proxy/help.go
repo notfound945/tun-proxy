@@ -111,8 +111,9 @@ options:
 	"cleanup": `usage: tun-proxy cleanup [options]
 
 options:
-  -state PATH  runtime state (default: /var/run/tun-proxy/state.json)
-  -lock PATH   fallback stale lock path
+  -state PATH        runtime state (default: /var/run/tun-proxy/state.json)
+  -lock PATH         fallback stale lock path
+  -timeout DURATION  maximum cleanup duration (default: 30s)
 `,
 	"service": `usage: tun-proxy service <command> [options]
 

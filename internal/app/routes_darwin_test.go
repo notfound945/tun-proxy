@@ -56,16 +56,30 @@ func TestRemoveRecordedRoutesUsesReverseOrderAndPersistsProgress(t *testing.T) {
 	}
 }
 
-func TestRemoveRecordedRoutesStopsBeforeIPv4WhenIPv6Fails(t *testing.T) {
+func TestRemoveRecordedRoutesContinuesToIPv4WhenIPv6Fails(t *testing.T) {
 	path, state := writeRouteTestState(t)
 	getIPv6 := "/sbin/route -n get -inet6 fd00:7::1"
-	runner := &routeTestRunner{responses: make(map[string]string), fail: map[string]error{getIPv6: errors.New("lookup failed")}}
+	runner := &routeTestRunner{responses: map[string]string{
+		"/sbin/route -n get 198.18.0.1": "destination: 198.18/15\ninterface: utun7\n",
+	}, fail: map[string]error{getIPv6: errors.New("lookup failed")}}
 	err := removeRecordedRoutes(t.Context(), runner, path, &state)
 	if err == nil || !strings.Contains(err.Error(), "fd00:7::/96") {
 		t.Fatalf("removeRecordedRoutes() = %v", err)
 	}
-	if !reflect.DeepEqual(runner.calls, []string{getIPv6}) || state.Route == nil || len(state.Routes) != 1 {
+	want := []string{
+		getIPv6,
+		"/sbin/route -n get 198.18.0.1",
+		"/sbin/route -n delete -net 198.18.0.0/15 -interface utun7",
+	}
+	if !reflect.DeepEqual(runner.calls, want) || state.Route != nil || len(state.Routes) != 1 {
 		t.Fatalf("calls=%v state=%+v", runner.calls, state)
+	}
+	persisted, readErr := system.ReadState(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if persisted.Route != nil || len(persisted.Routes) != 1 {
+		t.Fatalf("persisted routes = legacy:%+v additional:%+v", persisted.Route, persisted.Routes)
 	}
 }
 
@@ -110,4 +124,40 @@ func writeRouteTestState(t *testing.T) (string, system.State) {
 		t.Fatal(err)
 	}
 	return path, state
+}
+
+func TestRemoveRecordedRoutesContinuesPastFailedAdditionalRoute(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	state := system.NewState("sha256:test")
+	state.Route = &system.RouteState{Prefix: "198.18.0.0/15", Interface: "utun7"}
+	state.Routes = []system.RouteState{
+		{Prefix: "0.0.0.0/1", Interface: "utun7"},
+		{Prefix: "128.0.0.0/1", Interface: "utun7"},
+	}
+	if err := system.WriteState(path, state); err != nil {
+		t.Fatal(err)
+	}
+	failedLookup := "/sbin/route -n get 128.0.0.1"
+	runner := &routeTestRunner{responses: map[string]string{
+		"/sbin/route -n get 0.0.0.1":    "destination: default\nmask: 128.0.0.0\ninterface: utun7\n",
+		"/sbin/route -n get 198.18.0.1": "destination: 198.18/15\ninterface: utun7\n",
+	}, fail: map[string]error{failedLookup: errors.New("lookup failed")}}
+
+	err := removeRecordedRoutes(t.Context(), runner, path, &state)
+	if err == nil || !strings.Contains(err.Error(), "128.0.0.0/1") {
+		t.Fatalf("removeRecordedRoutes() = %v", err)
+	}
+	want := []string{
+		failedLookup,
+		"/sbin/route -n get 0.0.0.1",
+		"/sbin/route -n delete -net 0.0.0.0/1 -interface utun7",
+		"/sbin/route -n get 198.18.0.1",
+		"/sbin/route -n delete -net 198.18.0.0/15 -interface utun7",
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %v, want %v", runner.calls, want)
+	}
+	if state.Route != nil || !reflect.DeepEqual(state.Routes, []system.RouteState{{Prefix: "128.0.0.0/1", Interface: "utun7"}}) {
+		t.Fatalf("remaining state = %+v", state)
+	}
 }

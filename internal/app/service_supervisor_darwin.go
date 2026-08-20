@@ -261,7 +261,7 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 		return finish(err)
 	}
 	if runtime.System.ManageDNS {
-		snapshot, err := system.SnapshotDNS(ctx, runner)
+		snapshot, err := system.SnapshotDNS(ctx, runner, runtime.DNS.Listen.Addr())
 		if err != nil {
 			return finish(err)
 		}

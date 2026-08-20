@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/hailinpan/tun-proxy/internal/system"
@@ -13,25 +14,28 @@ import (
 // the legacy IPv4 route. Progress is made durable after every successful
 // deletion so crash cleanup can safely resume.
 func removeRecordedRoutes(ctx context.Context, runner system.CommandRunner, statePath string, state *system.State) error {
+	var failures []error
 	for index := len(state.Routes) - 1; index >= 0; index-- {
 		route := state.Routes[index]
 		if err := system.RemoveRoute(ctx, runner, route); err != nil {
-			return fmt.Errorf("remove recorded route %s: %w", route.Prefix, err)
+			failures = append(failures, fmt.Errorf("remove recorded route %s: %w", route.Prefix, err))
+			continue
 		}
-		state.Routes = state.Routes[:index]
+		state.Routes = append(state.Routes[:index], state.Routes[index+1:]...)
 		if err := system.WriteState(statePath, *state); err != nil {
-			return fmt.Errorf("persist route rollback: %w", err)
+			failures = append(failures, fmt.Errorf("persist route rollback after removing %s: %w", route.Prefix, err))
 		}
 	}
-	if state.Route == nil {
-		return nil
+	if state.Route != nil {
+		route := *state.Route
+		if err := system.RemoveRoute(ctx, runner, route); err != nil {
+			failures = append(failures, fmt.Errorf("remove Fake IP route %s: %w", route.Prefix, err))
+		} else {
+			state.Route = nil
+			if err := system.WriteState(statePath, *state); err != nil {
+				failures = append(failures, fmt.Errorf("persist route rollback after removing %s: %w", route.Prefix, err))
+			}
+		}
 	}
-	if err := system.RemoveRoute(ctx, runner, *state.Route); err != nil {
-		return fmt.Errorf("remove Fake IP route %s: %w", state.Route.Prefix, err)
-	}
-	state.Route = nil
-	if err := system.WriteState(statePath, *state); err != nil {
-		return fmt.Errorf("persist route rollback: %w", err)
-	}
-	return nil
+	return errors.Join(failures...)
 }

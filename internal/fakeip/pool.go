@@ -41,22 +41,26 @@ type Snapshot struct {
 }
 
 type Pool struct {
-	mutex          sync.Mutex
-	prefix         netip.Prefix
-	mappingTTL     time.Duration
-	start          netip.Addr
-	end            netip.Addr
-	next           netip.Addr
-	capacity       uint64
-	maxMappings    int
-	byDomain       map[string]*entry
-	byAddress      map[netip.Addr]*entry
-	pendingDeletes map[string]struct{}
-	now            func() time.Time
-	persist        func(persistenceUpdate, func() Snapshot) error
-	flush          func(Snapshot) error
-	reclaimed      uint64
-	exhaustions    uint64
+	// persistenceMutex serializes journal/checkpoint writes. When both locks are
+	// needed, acquire persistenceMutex before mutex; disk I/O must never run
+	// while mutex is held.
+	persistenceMutex sync.Mutex
+	mutex            sync.Mutex
+	prefix           netip.Prefix
+	mappingTTL       time.Duration
+	start            netip.Addr
+	end              netip.Addr
+	next             netip.Addr
+	capacity         uint64
+	maxMappings      int
+	byDomain         map[string]*entry
+	byAddress        map[netip.Addr]*entry
+	pendingDeletes   map[string]struct{}
+	now              func() time.Time
+	persist          func(persistenceUpdate, func() Snapshot) error
+	flush            func(Snapshot) error
+	reclaimed        uint64
+	exhaustions      uint64
 }
 
 type Stats struct {
@@ -133,16 +137,25 @@ func (pool *Pool) GetOrAllocate(domain string) (netip.Addr, error) {
 	if err != nil {
 		return netip.Addr{}, err
 	}
+
+	// Persistence operations are serialized separately from the mapping lock.
+	// This keeps disk I/O ordered without blocking lookups, flow acquisition,
+	// statistics, or snapshots while the journal is being synced.
+	pool.persistenceMutex.Lock()
+	defer pool.persistenceMutex.Unlock()
+
 	pool.mutex.Lock()
-	defer pool.mutex.Unlock()
 	now := pool.now()
 	if existing := pool.byDomain[normalized]; existing != nil {
 		existing.expiresAt = now.Add(pool.mappingTTL)
-		return existing.address, nil
+		address := existing.address
+		pool.mutex.Unlock()
+		return address, nil
 	}
 	pool.pruneLocked(now)
 	if len(pool.byDomain) >= pool.maxMappings {
 		pool.exhaustions++
+		pool.mutex.Unlock()
 		return netip.Addr{}, ErrExhausted
 	}
 
@@ -165,26 +178,41 @@ func (pool *Pool) GetOrAllocate(domain string) (netip.Addr, error) {
 		mapping := &entry{domain: normalized, address: candidate, expiresAt: now.Add(pool.mappingTTL)}
 		pool.byDomain[normalized] = mapping
 		pool.byAddress[candidate] = mapping
-		if pool.persist != nil {
-			removed := make([]string, 0, len(pool.pendingDeletes))
-			for domain := range pool.pendingDeletes {
-				removed = append(removed, domain)
-			}
-			slices.Sort(removed)
-			update := persistenceUpdate{
-				RecordedAt: now,
-				Removed:    removed,
-				Mapping:    Mapping{Domain: mapping.domain, Address: mapping.address.String(), ExpiresAt: mapping.expiresAt},
-			}
-			if err := pool.persist(update, func() Snapshot { return pool.snapshotLocked(now) }); err != nil {
-				pool.deleteUntrackedLocked(mapping)
-				return netip.Addr{}, fmt.Errorf("persist Fake IP allocation: %w", err)
-			}
-			clear(pool.pendingDeletes)
+		persist := pool.persist
+		if persist == nil {
+			pool.mutex.Unlock()
+			return candidate, nil
 		}
+
+		removed := make([]string, 0, len(pool.pendingDeletes))
+		for domain := range pool.pendingDeletes {
+			removed = append(removed, domain)
+		}
+		slices.Sort(removed)
+		update := persistenceUpdate{
+			RecordedAt: now,
+			Removed:    removed,
+			Mapping:    Mapping{Domain: mapping.domain, Address: mapping.address.String(), ExpiresAt: mapping.expiresAt},
+		}
+		pool.mutex.Unlock()
+
+		if err := persist(update, pool.Snapshot); err != nil {
+			pool.mutex.Lock()
+			if pool.byDomain[normalized] == mapping {
+				pool.deleteUntrackedLocked(mapping)
+			}
+			pool.mutex.Unlock()
+			return netip.Addr{}, fmt.Errorf("persist Fake IP allocation: %w", err)
+		}
+		pool.mutex.Lock()
+		for _, domain := range removed {
+			delete(pool.pendingDeletes, domain)
+		}
+		pool.mutex.Unlock()
 		return candidate, nil
 	}
 	pool.exhaustions++
+	pool.mutex.Unlock()
 	return netip.Addr{}, ErrExhausted
 }
 
@@ -388,6 +416,8 @@ func (pool *Pool) validateMapping(item Mapping, protectedUntil time.Time, label 
 }
 
 func (pool *Pool) setPersistence(persist func(persistenceUpdate, func() Snapshot) error, flush func(Snapshot) error) {
+	pool.persistenceMutex.Lock()
+	defer pool.persistenceMutex.Unlock()
 	pool.mutex.Lock()
 	defer pool.mutex.Unlock()
 	pool.persist = persist
@@ -395,15 +425,30 @@ func (pool *Pool) setPersistence(persist func(persistenceUpdate, func() Snapshot
 }
 
 func (pool *Pool) flushPersistence() error {
+	pool.persistenceMutex.Lock()
+	defer pool.persistenceMutex.Unlock()
+
 	pool.mutex.Lock()
-	defer pool.mutex.Unlock()
-	if pool.flush == nil {
+	flush := pool.flush
+	if flush == nil {
+		pool.mutex.Unlock()
 		return nil
 	}
-	if err := pool.flush(pool.snapshotLocked(pool.now())); err != nil {
+	snapshot := pool.snapshotLocked(pool.now())
+	removed := make([]string, 0, len(pool.pendingDeletes))
+	for domain := range pool.pendingDeletes {
+		removed = append(removed, domain)
+	}
+	pool.mutex.Unlock()
+
+	if err := flush(snapshot); err != nil {
 		return err
 	}
-	clear(pool.pendingDeletes)
+	pool.mutex.Lock()
+	for _, domain := range removed {
+		delete(pool.pendingDeletes, domain)
+	}
+	pool.mutex.Unlock()
 	return nil
 }
 

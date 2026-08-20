@@ -21,6 +21,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const cleanupCommandTimeout = 30 * time.Second
+
 var (
 	version   = "local"
 	commit    = "unknown"
@@ -266,13 +268,21 @@ func cleanupCommand(args []string) error {
 	flags := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 	statePath := flags.String("state", "/var/run/tun-proxy/state.json", "path to runtime state")
 	lockPath := flags.String("lock", "/var/run/tun-proxy/tun-proxy.lock", "fallback path to stale process lock")
+	timeout := flags.Duration("timeout", cleanupCommandTimeout, "maximum cleanup duration")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("cleanup received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if err := app.Cleanup(context.Background(), *statePath, *lockPath); err != nil {
+	if *timeout <= 0 {
+		return errors.New("cleanup timeout must be positive")
+	}
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, unix.SIGTERM)
+	defer stop()
+	cleanupCtx, cancel := context.WithTimeout(signalCtx, *timeout)
+	defer cancel()
+	if err := app.Cleanup(cleanupCtx, *statePath, *lockPath); err != nil {
 		return err
 	}
 	fmt.Println("cleanup complete")

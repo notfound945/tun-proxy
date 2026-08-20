@@ -15,7 +15,10 @@ import (
 
 const networkSetup = "/usr/sbin/networksetup"
 
-func SnapshotDNS(ctx context.Context, runner CommandRunner) ([]DNSState, error) {
+func SnapshotDNS(ctx context.Context, runner CommandRunner, replacement netip.Addr) ([]DNSState, error) {
+	if !replacement.IsValid() || !replacement.IsLoopback() {
+		return nil, fmt.Errorf("DNS replacement %s is not loopback", replacement)
+	}
 	output, err := runner.Run(ctx, networkSetup, "-listnetworkserviceorder")
 	if err != nil {
 		return nil, fmt.Errorf("list network service order: %w", err)
@@ -24,15 +27,18 @@ func SnapshotDNS(ctx context.Context, runner CommandRunner) ([]DNSState, error) 
 	if len(services) == 0 {
 		return nil, errors.New("no active IPv4 network services found")
 	}
-	return snapshotDNSStates(ctx, runner, services)
+	return snapshotDNSStates(ctx, runner, services, replacement)
 }
 
-func snapshotDNSStates(ctx context.Context, runner CommandRunner, services []networkService) ([]DNSState, error) {
+func snapshotDNSStates(ctx context.Context, runner CommandRunner, services []networkService, replacement netip.Addr) ([]DNSState, error) {
 	states := make([]DNSState, 0, len(services))
 	for _, service := range services {
 		servers, err := getDNS(ctx, runner, service.Name)
 		if err != nil {
 			return nil, err
+		}
+		if slices.Contains(servers, replacement.String()) {
+			return nil, fmt.Errorf("refuse to record DNS service %q with replacement address %s as its previous DNS; restore the service DNS or run cleanup first", service.Name, replacement)
 		}
 		states = append(states, DNSState{Service: service.Name, Previous: servers})
 	}
@@ -60,9 +66,13 @@ func PlanDNS(states []DNSState, loopback netip.Addr) ([]DNSState, error) {
 	if !loopback.IsValid() || !loopback.IsLoopback() {
 		return nil, fmt.Errorf("DNS replacement %s is not loopback", loopback)
 	}
+	replacement := loopback.String()
 	planned := make([]DNSState, 0, len(states))
 	for _, state := range states {
-		state.Applied = []string{loopback.String()}
+		if slices.Contains(state.Previous, replacement) {
+			return nil, fmt.Errorf("refuse to record DNS service %q with replacement address %s as its previous DNS; restore the service DNS or run cleanup first", state.Service, replacement)
+		}
+		state.Applied = []string{replacement}
 		planned = append(planned, state)
 	}
 	return planned, nil

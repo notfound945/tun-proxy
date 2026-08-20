@@ -35,7 +35,7 @@ func TestSnapshotApplyAndRestoreDNS(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]string{
 		networkSetup + " -getdnsservers Wi-Fi": "8.8.8.8\n8.8.4.4\n",
 	}, fail: make(map[string]error)}
-	states, err := snapshotDNSStates(t.Context(), runner, []networkService{{Name: "Wi-Fi", Device: "en0"}})
+	states, err := snapshotDNSStates(t.Context(), runner, []networkService{{Name: "Wi-Fi", Device: "en0"}}, netip.MustParseAddr("127.0.0.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +54,43 @@ func TestSnapshotApplyAndRestoreDNS(t *testing.T) {
 	last := runner.calls[len(runner.calls)-1]
 	if !reflect.DeepEqual(last.args, []string{"-setdnsservers", "Wi-Fi", "8.8.8.8", "8.8.4.4"}) {
 		t.Fatalf("last restore call = %v", last.args)
+	}
+}
+
+func TestSnapshotDNSRefusesReplacementAsPrevious(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]string{
+		networkSetup + " -getdnsservers Wi-Fi": "8.8.8.8\n127.0.0.1\n",
+	}, fail: make(map[string]error)}
+	states, err := snapshotDNSStates(
+		t.Context(), runner, []networkService{{Name: "Wi-Fi", Device: "en0"}}, netip.MustParseAddr("127.0.0.1"),
+	)
+	if err == nil || !strings.Contains(err.Error(), "replacement address") {
+		t.Fatalf("snapshotDNSStates() = (%v, %v)", states, err)
+	}
+	if states != nil {
+		t.Fatalf("snapshotDNSStates() returned partial snapshot: %v", states)
+	}
+}
+
+func TestPlanDNSRefusesReplacementAlreadyRecordedAsPrevious(t *testing.T) {
+	states := []DNSState{{Service: "Wi-Fi", Previous: []string{"8.8.8.8", "127.0.0.1"}}}
+	planned, err := PlanDNS(states, netip.MustParseAddr("127.0.0.1"))
+	if err == nil || !strings.Contains(err.Error(), "replacement address") {
+		t.Fatalf("PlanDNS() = (%v, %v)", planned, err)
+	}
+	if planned != nil {
+		t.Fatalf("PlanDNS() returned partial plan: %v", planned)
+	}
+}
+
+func TestPlanDNSPreservesDifferentLoopbackResolver(t *testing.T) {
+	states := []DNSState{{Service: "Wi-Fi", Previous: []string{"127.0.0.2"}}}
+	planned, err := PlanDNS(states, netip.MustParseAddr("127.0.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := planned[0].Previous; !reflect.DeepEqual(got, []string{"127.0.0.2"}) {
+		t.Fatalf("Previous = %v", got)
 	}
 }
 

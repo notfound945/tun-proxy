@@ -167,3 +167,81 @@ func TestPoolExhaustionAndReclaim(t *testing.T) {
 		t.Fatalf("released mappings not reclaimed: %+v", pool.Stats())
 	}
 }
+
+func TestPersistenceIODoesNotHoldPoolMutex(t *testing.T) {
+	newTestPool := func(t *testing.T) *Pool {
+		t.Helper()
+		pool, err := New(netip.MustParsePrefix("198.18.0.0/24"), time.Hour, 32, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pool
+	}
+	assertStatsAvailable := func(t *testing.T, pool *Pool) {
+		t.Helper()
+		result := make(chan Stats, 1)
+		go func() { result <- pool.Stats() }()
+		select {
+		case stats := <-result:
+			if stats.Used != 1 {
+				t.Fatalf("Stats() during persistence = %+v", stats)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Stats() blocked while persistence performed I/O")
+		}
+	}
+
+	t.Run("allocation journal", func(t *testing.T) {
+		pool := newTestPool(t)
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		pool.setPersistence(func(_ persistenceUpdate, snapshot func() Snapshot) error {
+			current := snapshot()
+			if len(current.Mappings) != 1 {
+				t.Errorf("persistence snapshot mappings = %d", len(current.Mappings))
+			}
+			close(entered)
+			<-release
+			return nil
+		}, func(Snapshot) error { return nil })
+
+		allocation := make(chan error, 1)
+		go func() {
+			_, err := pool.GetOrAllocate("example.com")
+			allocation <- err
+		}()
+		<-entered
+		assertStatsAvailable(t, pool)
+		close(release)
+		if err := <-allocation; err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("snapshot flush", func(t *testing.T) {
+		pool := newTestPool(t)
+		pool.setPersistence(func(_ persistenceUpdate, _ func() Snapshot) error { return nil }, func(Snapshot) error { return nil })
+		if _, err := pool.GetOrAllocate("example.com"); err != nil {
+			t.Fatal(err)
+		}
+
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		pool.setPersistence(func(_ persistenceUpdate, _ func() Snapshot) error { return nil }, func(snapshot Snapshot) error {
+			if len(snapshot.Mappings) != 1 {
+				t.Errorf("flush snapshot mappings = %d", len(snapshot.Mappings))
+			}
+			close(entered)
+			<-release
+			return nil
+		})
+		flushed := make(chan error, 1)
+		go func() { flushed <- pool.flushPersistence() }()
+		<-entered
+		assertStatsAvailable(t, pool)
+		close(release)
+		if err := <-flushed; err != nil {
+			t.Fatal(err)
+		}
+	})
+}

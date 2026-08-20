@@ -22,6 +22,9 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 	if !strings.Contains(output.String(), "-version") {
 		t.Fatalf("top-level help missing version flag:\n%s", output.String())
 	}
+	if usage := commandUsages["cleanup"]; !strings.Contains(usage, "-timeout DURATION") {
+		t.Fatalf("cleanup help missing timeout flag: %s", usage)
+	}
 
 	for _, topic := range []string{
 		"config validate",
