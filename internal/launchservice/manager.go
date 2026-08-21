@@ -101,6 +101,37 @@ type Status struct {
 	Runtime   RuntimeState `json:"runtime"`
 }
 
+// ConfigUpdate is an activated managed-configuration replacement that must be
+// committed after runtime acknowledgement or rolled back after rejection.
+type ConfigUpdate struct {
+	replacement replacement
+	finalized   bool
+}
+
+// Commit keeps the replacement and removes its rollback backup.
+func (update *ConfigUpdate) Commit() error {
+	if update == nil {
+		return errors.New("managed configuration update is nil")
+	}
+	if update.finalized {
+		return errors.New("managed configuration update is already finalized")
+	}
+	update.finalized = true
+	return update.replacement.commit()
+}
+
+// Rollback restores the managed configuration that preceded this update.
+func (update *ConfigUpdate) Rollback() error {
+	if update == nil {
+		return errors.New("managed configuration update is nil")
+	}
+	if update.finalized {
+		return errors.New("managed configuration update is already finalized")
+	}
+	update.finalized = true
+	return update.replacement.rollback()
+}
+
 type Manager struct {
 	Layout       Layout
 	Runner       CommandRunner
@@ -188,7 +219,7 @@ func (manager *Manager) Install(ctx context.Context, binarySource, configSource 
 		return err
 	}
 	stages = append(stages, binaryStage)
-	configStage, err := stageCopy(configSource, manager.Layout.Config, 0o600, 1<<20)
+	configStage, err := stageCopy(configSource, manager.Layout.Config, 0o600, privsep.MaxConfigSize)
 	if err != nil {
 		return err
 	}
@@ -356,6 +387,41 @@ func (manager *Manager) Restart(ctx context.Context) error {
 	return manager.Start(ctx)
 }
 
+// BeginConfigUpdate atomically activates validated configuration bytes while
+// retaining the previous managed configuration for commit or rollback after
+// the running service acknowledges the reload.
+func (manager *Manager) BeginConfigUpdate(contents []byte) (*ConfigUpdate, error) {
+	if err := manager.validate(); err != nil {
+		return nil, err
+	}
+	if err := manager.requireRoot(); err != nil {
+		return nil, err
+	}
+	installed, err := manager.installed()
+	if err != nil {
+		return nil, err
+	}
+	if !installed {
+		return nil, serviceNotInstalledError()
+	}
+	if len(contents) == 0 {
+		return nil, errors.New("managed configuration contents are empty")
+	}
+	if len(contents) > privsep.MaxConfigSize {
+		return nil, fmt.Errorf("managed configuration exceeds %d bytes", privsep.MaxConfigSize)
+	}
+	stage, err := stageContents(contents, manager.Layout.Config, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(stage) //nolint:errcheck // Best-effort staging cleanup after activation failure.
+	replaced, err := activateStage(stage, manager.Layout.Config, false)
+	if err != nil {
+		return nil, err
+	}
+	return &ConfigUpdate{replacement: replaced}, nil
+}
+
 // Reload asks the running supervisor to re-read and atomically apply its
 // managed configuration. Runtime acknowledgement is observed by the CLI via
 // the worker status socket.
@@ -423,7 +489,7 @@ func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource 
 	type stagedTarget struct{ stage, target string }
 	staged := []stagedTarget{{binaryStage, manager.Layout.Binary}}
 	if configSource != "" {
-		configStage, err := stageCopy(configSource, manager.Layout.Config, 0o600, 1<<20)
+		configStage, err := stageCopy(configSource, manager.Layout.Config, 0o600, privsep.MaxConfigSize)
 		if err != nil {
 			return err
 		}

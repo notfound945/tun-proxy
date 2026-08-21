@@ -157,8 +157,10 @@ Run "tun-proxy help service <command>" for details.
 
 {{generated-options}}
 
-The installed configuration is re-read. Immutable changes are rejected and
-the current runtime remains active.
+Without -config or -user-config, the installed configuration is re-read.
+-user-config selects the invoking user's ~/.config/tun-proxy/config.yaml; -config
+selects an explicit path. The source is validated and transactionally applied,
+with rollback when runtime acknowledgement fails.
 `,
 	"service status": `usage: tun-proxy service status [options]
 

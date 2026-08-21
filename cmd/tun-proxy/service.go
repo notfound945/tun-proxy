@@ -92,7 +92,11 @@ func hasOnlyHelpArgument(args []string) bool {
 	return len(args) == 1 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help")
 }
 
-type serviceReloadOptions struct{ timeout time.Duration }
+type serviceReloadOptions struct {
+	timeout       time.Duration
+	configPath    string
+	useUserConfig bool
+}
 
 func newServiceReloadFlagSet(output io.Writer, options *serviceReloadOptions) *flag.FlagSet {
 	if options == nil {
@@ -100,6 +104,8 @@ func newServiceReloadFlagSet(output io.Writer, options *serviceReloadOptions) *f
 	}
 	flags := newCommandFlagSet("service reload", output)
 	flags.DurationVar(&options.timeout, "timeout", 15*time.Second, "wait `DURATION` for runtime confirmation")
+	flags.StringVar(&options.configPath, "config", "", "validate and install configuration `PATH` before reload")
+	flags.BoolVar(&options.useUserConfig, "user-config", false, "reload the invoking user's default configuration")
 	return flags
 }
 
@@ -115,6 +121,10 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 	if options.timeout <= 0 {
 		return errors.New("service reload timeout must be positive")
 	}
+	configPath, err := resolveServiceReloadConfigPath(options)
+	if err != nil {
+		return err
+	}
 	status, err := manager.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect service before reload: %w", err)
@@ -122,6 +132,25 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 	if err := validateServiceReloadStatus(status); err != nil {
 		return err
 	}
+
+	var configContents []byte
+	var expectedDigest string
+	if configPath != "" {
+		_, contents, next, digest, err := loadValidatedConfigSource(configPath)
+		if err != nil {
+			return fmt.Errorf("validate reload configuration: %w", err)
+		}
+		current, err := config.LoadFile(manager.Layout.Config)
+		if err != nil {
+			return fmt.Errorf("load managed configuration before reload: %w", err)
+		}
+		if err := app.PreflightReload(ctx, current, next); err != nil {
+			return fmt.Errorf("validate configuration for live reload: %w", err)
+		}
+		configContents = contents
+		expectedDigest = digest
+	}
+
 	state, err := system.ReadState(manager.Layout.State)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -136,14 +165,80 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 	if err != nil {
 		return fmt.Errorf("query runtime before reload: %w", err)
 	}
-	if err := manager.Reload(ctx); err != nil {
-		return err
+
+	var configUpdate *launchservice.ConfigUpdate
+	if configContents != nil {
+		configUpdate, err = manager.BeginConfigUpdate(configContents)
+		if err != nil {
+			return fmt.Errorf("synchronize managed configuration: %w", err)
+		}
 	}
-	after, err := waitForServiceReload(ctx, state.StatusSocket, before, options.timeout)
-	if err != nil {
-		return err
+
+	after, reloadErr := requestServiceReload(ctx, manager, state.StatusSocket, before, options.timeout)
+	if reloadErr == nil && expectedDigest != "" && after.ConfigDigest != expectedDigest {
+		reloadErr = fmt.Errorf("runtime acknowledged config digest %q, want %q", after.ConfigDigest, expectedDigest)
+	}
+	if reloadErr != nil {
+		if configUpdate == nil {
+			return reloadErr
+		}
+		rollbackErr := rollbackServiceReloadConfig(manager, configUpdate, state.StatusSocket, options.timeout)
+		if rollbackErr != nil {
+			return errors.Join(fmt.Errorf("apply synchronized configuration: %w", reloadErr), rollbackErr)
+		}
+		return fmt.Errorf("apply synchronized configuration (managed configuration rolled back): %w", reloadErr)
+	}
+	if configUpdate != nil {
+		if err := configUpdate.Commit(); err != nil {
+			return fmt.Errorf("configuration reloaded but managed configuration commit cleanup failed: %w", err)
+		}
+		fmt.Printf("managed configuration synchronized: %s\n", manager.Layout.Config)
 	}
 	fmt.Printf("tun-proxy service reloaded config=%s successes=%d failures=%d\n", after.ConfigDigest, after.Reload.Successes, after.Reload.Failures)
+	return nil
+}
+
+func resolveServiceReloadConfigPath(options serviceReloadOptions) (string, error) {
+	if options.useUserConfig && options.configPath != "" {
+		return "", errors.New("service reload -user-config and -config cannot be used together")
+	}
+	if options.useUserConfig {
+		return defaultUserConfigPath(), nil
+	}
+	return options.configPath, nil
+}
+
+func requestServiceReload(
+	ctx context.Context,
+	manager *launchservice.Manager,
+	socket string,
+	before runtimestatus.Snapshot,
+	timeout time.Duration,
+) (runtimestatus.Snapshot, error) {
+	if err := manager.Reload(ctx); err != nil {
+		return runtimestatus.Snapshot{}, err
+	}
+	return waitForServiceReload(ctx, socket, before, timeout)
+}
+
+func rollbackServiceReloadConfig(
+	manager *launchservice.Manager,
+	update *launchservice.ConfigUpdate,
+	socket string,
+	timeout time.Duration,
+) error {
+	if err := update.Rollback(); err != nil {
+		return fmt.Errorf("roll back managed configuration: %w", err)
+	}
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), timeout+25*time.Second)
+	defer cancel()
+	before, err := runtimestatus.Query(recoveryCtx, socket)
+	if err != nil {
+		return fmt.Errorf("query runtime before restoring rolled-back configuration: %w", err)
+	}
+	if _, err := requestServiceReload(recoveryCtx, manager, socket, before, timeout); err != nil {
+		return fmt.Errorf("restore rolled-back configuration in runtime: %w", err)
+	}
 	return nil
 }
 
@@ -509,18 +604,50 @@ func validateServiceRuntime(runtime *config.Config) error {
 }
 
 func validateConfigSource(path string) (string, error) {
-	absolute, err := absoluteRegularSource(path)
+	absolute, _, _, _, err := loadValidatedConfigSource(path)
+	return absolute, err
+}
+
+func loadValidatedConfigSource(path string) (string, []byte, *config.Config, string, error) {
+	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return "", err
+		return "", nil, nil, "", fmt.Errorf("resolve source path %q: %w", path, err)
 	}
-	runtime, err := config.LoadFile(absolute)
+	absolute = filepath.Clean(absolute)
+	info, err := os.Lstat(absolute)
 	if err != nil {
-		return "", err
+		return "", nil, nil, "", fmt.Errorf("inspect source %q: %w", absolute, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", nil, nil, "", fmt.Errorf("source %q must be a regular file, not a symlink", absolute)
+	}
+	file, err := os.Open(absolute)
+	if err != nil {
+		return "", nil, nil, "", fmt.Errorf("open source %q: %w", absolute, err)
+	}
+	defer file.Close() //nolint:errcheck // Best-effort read-only source cleanup.
+	opened, err := file.Stat()
+	if err != nil {
+		return "", nil, nil, "", fmt.Errorf("inspect opened source %q: %w", absolute, err)
+	}
+	if !os.SameFile(info, opened) {
+		return "", nil, nil, "", fmt.Errorf("source %q changed while opening", absolute)
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, privsep.MaxConfigSize+1))
+	if err != nil {
+		return "", nil, nil, "", fmt.Errorf("read source %q: %w", absolute, err)
+	}
+	if len(contents) > privsep.MaxConfigSize {
+		return "", nil, nil, "", fmt.Errorf("source %q exceeds %d bytes", absolute, privsep.MaxConfigSize)
+	}
+	runtime, digest, err := config.LoadBytesWithDigest(contents)
+	if err != nil {
+		return "", nil, nil, "", err
 	}
 	if err := validateServiceRuntime(runtime); err != nil {
-		return "", err
+		return "", nil, nil, "", err
 	}
-	return absolute, nil
+	return absolute, contents, runtime, digest, nil
 }
 
 func serviceBinarySource(path string) (string, error) {

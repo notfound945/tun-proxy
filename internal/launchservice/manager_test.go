@@ -1,6 +1,7 @@
 package launchservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -289,6 +290,77 @@ func TestReloadSignalsRunningLaunchdJob(t *testing.T) {
 	}
 	if !containsCall(runner.calls, " kill SIGHUP system/"+layout.Label) {
 		t.Fatalf("reload calls = %v", runner.calls)
+	}
+}
+
+func TestBeginConfigUpdateCommitKeepsReplacement(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "binary", "old-config")
+	state := RuntimeState{Running: true, PID: 42, Phase: "running"}
+	manager := testManager(layout, &fakeRunner{loaded: true}, &state)
+
+	update, err := manager.BeginConfigUpdate([]byte("new-config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, layout.Config, "new-config", 0o600)
+	if err := update.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, layout.Config, "new-config", 0o600)
+	assertNoResidueTree(t, layout.Config)
+	if err := update.Rollback(); err == nil || !strings.Contains(err.Error(), "already finalized") {
+		t.Fatalf("Rollback() after Commit() error = %v", err)
+	}
+}
+
+func TestBeginConfigUpdateRollbackRestoresPreviousConfig(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "binary", "old-config")
+	state := RuntimeState{Running: true, PID: 42, Phase: "running"}
+	manager := testManager(layout, &fakeRunner{loaded: true}, &state)
+
+	update, err := manager.BeginConfigUpdate([]byte("new-config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, layout.Config, "new-config", 0o600)
+	if err := update.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, layout.Config, "old-config", 0o600)
+	assertNoResidueTree(t, layout.Config)
+	if err := update.Commit(); err == nil || !strings.Contains(err.Error(), "already finalized") {
+		t.Fatalf("Commit() after Rollback() error = %v", err)
+	}
+}
+
+func TestBeginConfigUpdateRejectsInvalidContents(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "binary", "old-config")
+	state := RuntimeState{}
+	manager := testManager(layout, &fakeRunner{}, &state)
+
+	for name, contents := range map[string][]byte{
+		"empty":     nil,
+		"oversized": bytes.Repeat([]byte{'x'}, privsep.MaxConfigSize+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := manager.BeginConfigUpdate(contents); err == nil {
+				t.Fatal("BeginConfigUpdate() unexpectedly succeeded")
+			}
+			assertFile(t, layout.Config, "old-config", 0o600)
+			assertNoResidueTree(t, layout.Config)
+		})
+	}
+}
+
+func TestBeginConfigUpdateRequiresInstalledService(t *testing.T) {
+	layout := testLayout(t)
+	state := RuntimeState{}
+	manager := testManager(layout, &fakeRunner{}, &state)
+	if _, err := manager.BeginConfigUpdate([]byte("new-config")); err == nil || !strings.Contains(err.Error(), "not completely installed") {
+		t.Fatalf("BeginConfigUpdate() error = %v", err)
 	}
 }
 

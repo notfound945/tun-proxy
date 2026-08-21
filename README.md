@@ -148,6 +148,26 @@ sudo tun-proxy service reload
 sudo tun-proxy service logs -follow
 ```
 
+安装后，CLI 使用的用户配置和 LaunchDaemon 使用的托管配置是两份独立文件。修改
+`~/.config/tun-proxy/config.yaml` 后，推荐通过 `reload -user-config` 先校验、同步，再热重载：
+
+```sh
+tun-proxy config validate
+sudo tun-proxy service reload -user-config
+```
+
+`-user-config` 会自动选择调用 `sudo` 的用户目录下的
+`~/.config/tun-proxy/config.yaml`。需要使用其他文件时仍可明确指定：
+
+```sh
+sudo tun-proxy service reload \
+  -config "/path/to/config.yaml"
+```
+
+同步目标固定为 `/Library/Application Support/tun-proxy/config.yaml`。不可热重载的修改会
+在同步前被拒绝；运行时应用失败时会回滚托管配置并恢复原有运行配置。不带 `-config` 或
+`-user-config` 的 `service reload` 只重读现有托管配置，不会自动复制用户配置。
+
 ## 文档
 
 - [本地开发、编译、安装与使用](docs/build-and-install.md)

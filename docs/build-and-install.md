@@ -366,6 +366,22 @@ sudo tun-proxy service logs -clear -follow
 stdout 和 stderr，使用 `-stream stdout|stderr` 可只清理指定日志；与 `-follow` 组合时会
 先清空再等待新日志。
 
+CLI 默认编辑的用户配置与 LaunchDaemon 读取的托管配置是两份独立文件。修改用户配置后，
+使用下面的命令完成校验、事务同步和热重载：
+
+```sh
+tun-proxy config validate
+sudo tun-proxy service reload -user-config
+```
+
+`-user-config` 会根据 `SUDO_USER` 选择调用者的
+`~/.config/tun-proxy/config.yaml`，无需手动展开完整路径。其他配置文件可以使用
+`-config /path/to/config.yaml`。
+
+配置会同步到 `/Library/Application Support/tun-proxy/config.yaml`。不可热重载字段或无效
+网口会在同步前被拒绝；运行时拒绝、确认超时或配置摘要不一致时，会回滚托管配置并恢复
+旧运行配置。不带 `-config` 或 `-user-config` 时只重读现有托管配置。
+
 ## 10. 更新二进制和配置
 
 ### Release 安装更新

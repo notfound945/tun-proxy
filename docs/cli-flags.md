@@ -300,15 +300,28 @@ sudo tun-proxy service restart
 ```sh
 sudo tun-proxy service reload
 sudo tun-proxy service reload -timeout 30s
+sudo tun-proxy service reload -user-config
+sudo tun-proxy service reload \
+  -config "/path/to/config.yaml"
 ```
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
+| `-config PATH` | 不同步 | 校验并事务性安装指定配置，然后热重载。 |
+| `-user-config` | `false` | 使用调用 `sudo` 的用户默认配置并热重载。 |
 | `-timeout DURATION` | `15s` | 等待运行时确认的正数时长。 |
 
 重载前会检查托管服务是否正在运行；未运行时会提示完整的
-`sudo tun-proxy service start` 命令。重载会重新读取已安装的配置，并等待 worker 报告成功
-或实际拒绝原因。不可变配置发生变化时，重载会被拒绝，当前运行实例保持活跃。
+`sudo tun-proxy service start` 命令。不带 `-config` 或 `-user-config` 时，只重新读取
+已经安装在 `/Library/Application Support/tun-proxy/config.yaml` 的托管配置。
+
+`-user-config` 会根据 `SUDO_USER` 选择调用者的
+`~/.config/tun-proxy/config.yaml`，等价于显式传入该路径，但不能和 `-config` 同时使用。
+使用任一配置参数时，CLI 会安全读取并校验指定文件，预检不可热重载字段和配置中的网口，
+然后将校验过的同一份字节内容原子同步到托管配置路径，发送重载信号并等待 worker 以
+配置摘要确认应用成功。如果预检失败，托管配置不会改变；如果运行时拒绝、确认超时或
+摘要不一致，CLI 会恢复旧托管配置，并再次触发重载以恢复旧运行配置。服务必须已经安装
+且正在运行。
 
 ### `service status`
 
