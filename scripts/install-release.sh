@@ -11,6 +11,7 @@ config_path=${CONFIG_PATH:-${config_dir}/config.yaml}
 install_command=${INSTALL:-/usr/bin/install}
 sudo_value=${SUDO-sudo}
 force_config=${FORCE_CONFIG:-0}
+print_next_steps=${PRINT_NEXT_STEPS:-1}
 semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
 
 usage() {
@@ -62,6 +63,8 @@ case $(uname -m) in
 esac
 
 [[ $force_config == 0 || $force_config == 1 ]] || fail 'FORCE_CONFIG 只能是 0 或 1。'
+[[ $print_next_steps == 0 || $print_next_steps == 1 ]] || \
+  fail 'PRINT_NEXT_STEPS 只能是 0 或 1。'
 [[ -n $prefix && $prefix == /* ]] || fail 'PREFIX 必须是绝对路径。'
 [[ -n $bindir && $bindir == /* ]] || fail 'BINDIR 必须是绝对路径。'
 [[ -n $config_dir && $config_dir == /* ]] || fail 'CONFIG_DIR 必须是绝对路径。'
@@ -176,4 +179,9 @@ fi
 
 printf '安装完成: %s\n' "$target"
 printf '用户配置: %s\n' "$config_path"
-printf '下一步可运行: tun-proxy config validate\n'
+if [[ $print_next_steps == 1 ]]; then
+  printf '下一步可运行：\n'
+  printf '  tun-proxy config validate\n'
+  printf '  sudo tun-proxy service install\n'
+  printf '  sudo tun-proxy service start  # 服务未运行时\n'
+fi

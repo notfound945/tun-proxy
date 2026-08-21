@@ -120,6 +120,7 @@ run_installer() {
   INSTALL="$install_command" \
   SUDO="$sudo_value" \
   FORCE_CONFIG=0 \
+  PRINT_NEXT_STEPS=0 \
     /bin/bash "$installer" "$@"
 }
 if (( $# == 1 )); then
@@ -144,8 +145,11 @@ for path in "$service_binary" "$service_plist"; do
 done
 
 if (( service_identity_artifacts == 0 )); then
-  printf '未检测到托管服务；本次只更新 CLI，后续首次安装可运行：\n'
+  printf '未检测到托管服务；本次只更新 CLI。\n'
+  printf '下一步可运行：\n'
+  printf '  tun-proxy config validate\n'
   printf '  sudo tun-proxy service install\n'
+  printf '  sudo tun-proxy service start  # 服务未运行时\n'
   exit 0
 fi
 if (( service_identity_artifacts == 1 )) || ! path_exists "$service_config"; then
@@ -167,4 +171,6 @@ fi
 
 printf '更新后的托管服务状态：\n'
 run_privileged "$target" service status
-printf '更新完成。若状态显示 running=false，可运行：sudo tun-proxy service start\n'
+printf '更新完成。下一步可运行：\n'
+printf '  tun-proxy config validate\n'
+printf '  sudo tun-proxy service start  # 状态显示 running=false 时\n'
