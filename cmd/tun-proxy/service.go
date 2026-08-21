@@ -115,8 +115,18 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 	if options.timeout <= 0 {
 		return errors.New("service reload timeout must be positive")
 	}
+	status, err := manager.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect service before reload: %w", err)
+	}
+	if err := validateServiceReloadStatus(status); err != nil {
+		return err
+	}
 	state, err := system.ReadState(manager.Layout.State)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return serviceReloadNotRunningError("")
+		}
 		return fmt.Errorf("read service state before reload: %w", err)
 	}
 	if state.StatusSocket == "" {
@@ -135,6 +145,20 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 	}
 	fmt.Printf("tun-proxy service reloaded config=%s successes=%d failures=%d\n", after.ConfigDigest, after.Reload.Successes, after.Reload.Failures)
 	return nil
+}
+
+func validateServiceReloadStatus(status launchservice.Status) error {
+	if !status.Installed {
+		return fmt.Errorf("tun-proxy service is not installed; run %q first", launchservice.InstallCommand)
+	}
+	if !status.Runtime.Running || status.Runtime.Phase != "running" {
+		return serviceReloadNotRunningError(status.Runtime.Phase)
+	}
+	return nil
+}
+
+func serviceReloadNotRunningError(phase string) error {
+	return fmt.Errorf("tun-proxy service is not running (phase=%q); run %q first", phase, launchservice.StartCommand)
 }
 
 func waitForServiceReload(ctx context.Context, socket string, before runtimestatus.Snapshot, timeout time.Duration) (runtimestatus.Snapshot, error) {

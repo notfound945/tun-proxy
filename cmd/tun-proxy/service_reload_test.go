@@ -7,8 +7,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hailinpan/tun-proxy/internal/launchservice"
 	runtimestatus "github.com/hailinpan/tun-proxy/internal/status"
 )
+
+func TestValidateServiceReloadStatusGuidesStoppedServiceToStart(t *testing.T) {
+	err := validateServiceReloadStatus(launchservice.Status{
+		Installed: true,
+		Loaded:    true,
+		Runtime:   launchservice.RuntimeState{Phase: "stopped"},
+	})
+	if err == nil || !strings.Contains(err.Error(), launchservice.StartCommand) {
+		t.Fatalf("validateServiceReloadStatus() error = %v, want command %q", err, launchservice.StartCommand)
+	}
+}
+
+func TestValidateServiceReloadStatusGuidesMissingServiceToInstall(t *testing.T) {
+	err := validateServiceReloadStatus(launchservice.Status{})
+	if err == nil || !strings.Contains(err.Error(), launchservice.InstallCommand) {
+		t.Fatalf("validateServiceReloadStatus() error = %v, want command %q", err, launchservice.InstallCommand)
+	}
+}
+
+func TestValidateServiceReloadStatusAcceptsRunningService(t *testing.T) {
+	err := validateServiceReloadStatus(launchservice.Status{
+		Installed: true,
+		Loaded:    true,
+		Runtime:   launchservice.RuntimeState{Running: true, Phase: "running"},
+	})
+	if err != nil {
+		t.Fatalf("validateServiceReloadStatus() error = %v", err)
+	}
+}
 
 func TestWaitForServiceReloadObservesSuccess(t *testing.T) {
 	before := runtimestatus.Snapshot{Reload: runtimestatus.ReloadStats{Successes: 2}}

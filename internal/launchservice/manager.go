@@ -265,11 +265,16 @@ func (manager *Manager) Start(ctx context.Context) error {
 	if !installed {
 		return serviceNotInstalledError()
 	}
-	if err := manager.bootstrap(ctx); err != nil {
-		return err
-	}
 	if _, err := manager.Runner.Run(ctx, launchctlPath, "enable", "system/"+manager.Layout.Label); err != nil {
 		return fmt.Errorf("enable service: %w", err)
+	}
+	// launchctl persists disable overrides independently from whether a job is
+	// currently loaded. A service stopped before reboot (or unloaded by an
+	// upgrade) can therefore be both disabled and unloaded. Enabling it before
+	// bootstrap is required because macOS rejects bootstrap for a disabled
+	// label with the otherwise opaque error "Bootstrap failed: 5".
+	if err := manager.bootstrap(ctx); err != nil {
+		return err
 	}
 	_, kickstartErr := manager.Runner.Run(ctx, launchctlPath, "kickstart", "system/"+manager.Layout.Label)
 	readyErr := manager.wait(ctx, manager.StartTimeout, func(state RuntimeState) bool {

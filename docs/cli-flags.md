@@ -306,8 +306,9 @@ sudo tun-proxy service reload -timeout 30s
 | --- | --- | --- |
 | `-timeout DURATION` | `15s` | 等待运行时确认的正数时长。 |
 
-重载会重新读取已安装的配置，并等待 worker 报告成功或实际拒绝原因。不可变配置发生变化时，
-重载会被拒绝，当前运行实例保持活跃。
+重载前会检查托管服务是否正在运行；未运行时会提示完整的
+`sudo tun-proxy service start` 命令。重载会重新读取已安装的配置，并等待 worker 报告成功
+或实际拒绝原因。不可变配置发生变化时，重载会被拒绝，当前运行实例保持活跃。
 
 ### `service status`
 

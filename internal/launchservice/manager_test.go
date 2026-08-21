@@ -124,9 +124,9 @@ func TestInstallCreatesArtifactsAndStarts(t *testing.T) {
 	}
 	wantCalls := []string{
 		launchctlPath + " print system/" + layout.Label,
+		launchctlPath + " enable system/" + layout.Label,
 		launchctlPath + " print system/" + layout.Label,
 		launchctlPath + " bootstrap system " + layout.Plist,
-		launchctlPath + " enable system/" + layout.Label,
 		launchctlPath + " kickstart system/" + layout.Label,
 	}
 	assertCalls(t, runner.calls, wantCalls)
@@ -199,6 +199,38 @@ func TestStartAcceptsKickstartCommandFailureAfterRuntimeBecomesReady(t *testing.
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start() rejected ready runtime after kickstart transport failure: %v", err)
 	}
+}
+
+func TestStartEnablesDisabledUnloadedJobBeforeBootstrap(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "binary", "config")
+	state := RuntimeState{}
+	runner := &fakeRunner{disabled: true}
+	runner.fail = func(call string) error {
+		if strings.Contains(call, " bootstrap ") && runner.disabled {
+			return errors.New("Bootstrap failed: 5: Input/output error")
+		}
+		return nil
+	}
+	runner.onSuccess = func(call string) {
+		if strings.Contains(call, " kickstart ") {
+			state = RuntimeState{Running: true, PID: 42, Phase: "running"}
+		}
+	}
+	manager := testManager(layout, runner, &state)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start() failed for disabled unloaded job: %v", err)
+	}
+	if runner.disabled {
+		t.Fatal("Start() left launchd label disabled")
+	}
+	wantCalls := []string{
+		launchctlPath + " enable system/" + layout.Label,
+		launchctlPath + " print system/" + layout.Label,
+		launchctlPath + " bootstrap system " + layout.Plist,
+		launchctlPath + " kickstart system/" + layout.Label,
+	}
+	assertCalls(t, runner.calls, wantCalls)
 }
 
 func TestStartReportsKickstartFailureWhenRuntimeNeverBecomesReady(t *testing.T) {
