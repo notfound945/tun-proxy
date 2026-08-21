@@ -201,7 +201,13 @@ func newServiceInstallFlagSet(output io.Writer, options *serviceInstallOptions) 
 	return flags
 }
 
-func serviceInstallCommand(ctx context.Context, manager *launchservice.Manager, args []string) error {
+const serviceLogsHintCommand = "sudo tun-proxy service logs"
+
+func serviceInstallCommand(ctx context.Context, manager *launchservice.Manager, args []string) (resultErr error) {
+	defer func() {
+		resultErr = withServiceLogsHint(resultErr)
+	}()
+
 	options := serviceInstallOptions{}
 	flags := newServiceInstallFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
@@ -218,8 +224,9 @@ func serviceInstallCommand(ctx context.Context, manager *launchservice.Manager, 
 	if err != nil {
 		return err
 	}
+	logCheckpoints := checkpointManagedLogs(manager.Layout)
 	if err := manager.Install(ctx, binarySource, configSource, options.start, options.startAtBoot); err != nil {
-		return err
+		return withServiceInstallLogDiagnostics(err, manager.Layout, logCheckpoints)
 	}
 	if options.start {
 		fmt.Println("tun-proxy service installed and started")
@@ -227,6 +234,13 @@ func serviceInstallCommand(ctx context.Context, manager *launchservice.Manager, 
 		fmt.Println("tun-proxy service installed")
 	}
 	return nil
+}
+
+func withServiceLogsHint(err error) error {
+	if err == nil || errors.Is(err, flag.ErrHelp) || strings.Contains(err.Error(), serviceLogsHintCommand) {
+		return err
+	}
+	return fmt.Errorf("%w\nto inspect service logs, run: %s", err, serviceLogsHintCommand)
 }
 
 type serviceStatusOptions struct{ jsonOutput bool }

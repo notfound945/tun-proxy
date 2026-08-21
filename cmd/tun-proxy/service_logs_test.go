@@ -1,9 +1,13 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/hailinpan/tun-proxy/internal/launchservice"
 )
 
 func TestLastLines(t *testing.T) {
@@ -41,5 +45,58 @@ func TestTailManagedLogRejectsSymlink(t *testing.T) {
 	}
 	if _, _, err := tailManagedLog(link, 10); err == nil {
 		t.Fatal("tailManagedLog accepted a symlink")
+	}
+}
+
+func TestServiceInstallLogDiagnosticsIncludesOnlyCurrentAttempt(t *testing.T) {
+	directory := t.TempDir()
+	layout := launchservice.Layout{
+		StandardOut: filepath.Join(directory, "stdout.log"),
+		StandardErr: filepath.Join(directory, "stderr.log"),
+	}
+	if err := os.WriteFile(layout.StandardOut, []byte("old stdout\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.StandardErr, []byte("old stderr\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints := checkpointManagedLogs(layout)
+	stdout, err := os.OpenFile(layout.StandardOut, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stdout.WriteString("current stdout\n"); err != nil {
+		_ = stdout.Close()
+		t.Fatal(err)
+	}
+	if err := stdout.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := os.OpenFile(layout.StandardErr, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stderr.WriteString("current stderr\n"); err != nil {
+		_ = stderr.Close()
+		t.Fatal(err)
+	}
+	if err := stderr.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	want := errors.New("service did not become ready")
+	got := withServiceInstallLogDiagnostics(want, layout, checkpoints)
+	if !errors.Is(got, want) {
+		t.Fatalf("withServiceInstallLogDiagnostics() error = %v, want wrapped %v", got, want)
+	}
+	for _, text := range []string{"service output from this install attempt", "current stderr", "current stdout"} {
+		if !strings.Contains(got.Error(), text) {
+			t.Fatalf("diagnostic error = %q, want %q", got, text)
+		}
+	}
+	for _, stale := range []string{"old stderr", "old stdout"} {
+		if strings.Contains(got.Error(), stale) {
+			t.Fatalf("diagnostic error included stale output %q: %q", stale, got)
+		}
 	}
 }

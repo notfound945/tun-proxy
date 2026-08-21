@@ -27,6 +27,13 @@ type followedLog struct {
 	Info   os.FileInfo
 }
 
+type managedLogCheckpoint struct {
+	Info os.FileInfo
+	Size int64
+}
+
+type managedLogCheckpoints map[string]managedLogCheckpoint
+
 type serviceLogsOptions struct {
 	lines  int
 	follow bool
@@ -96,6 +103,86 @@ func selectedManagedLogs(layout launchservice.Layout, stream string) ([]managedL
 	default:
 		return nil, fmt.Errorf("service logs stream must be stdout, stderr, or both, got %q", stream)
 	}
+}
+
+func checkpointManagedLogs(layout launchservice.Layout) managedLogCheckpoints {
+	checkpoints := make(managedLogCheckpoints, 2)
+	for _, log := range []managedLog{
+		{Name: "stderr", Path: layout.StandardErr},
+		{Name: "stdout", Path: layout.StandardOut},
+	} {
+		file, info, err := openManagedLog(log.Path)
+		if err != nil {
+			continue
+		}
+		_ = file.Close()
+		checkpoints[log.Path] = managedLogCheckpoint{Info: info, Size: info.Size()}
+	}
+	return checkpoints
+}
+
+func withServiceInstallLogDiagnostics(err error, layout launchservice.Layout, checkpoints managedLogCheckpoints) error {
+	if err == nil {
+		return nil
+	}
+	var diagnostics strings.Builder
+	for _, log := range []managedLog{
+		{Name: "stderr", Path: layout.StandardErr},
+		{Name: "stdout", Path: layout.StandardOut},
+	} {
+		contents, readErr := tailManagedLogSince(log.Path, checkpoints[log.Path], 50)
+		if readErr != nil {
+			if !errors.Is(readErr, os.ErrNotExist) {
+				fmt.Fprintf(&diagnostics, "==> %s (%s) <==\nunable to read log: %v\n", log.Name, log.Path, readErr)
+			}
+			continue
+		}
+		if len(contents) == 0 {
+			continue
+		}
+		fmt.Fprintf(&diagnostics, "==> %s (%s) <==\n%s", log.Name, log.Path, contents)
+		if contents[len(contents)-1] != '\n' {
+			diagnostics.WriteByte('\n')
+		}
+	}
+	if diagnostics.Len() == 0 {
+		return err
+	}
+	return fmt.Errorf("%w\nservice output from this install attempt:\n%s", err, strings.TrimSuffix(diagnostics.String(), "\n"))
+}
+
+func tailManagedLogSince(path string, checkpoint managedLogCheckpoint, lines int) ([]byte, error) {
+	file, info, err := openManagedLog(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close() //nolint:errcheck // Best-effort cleanup.
+
+	start := int64(0)
+	if checkpoint.Info != nil && os.SameFile(checkpoint.Info, info) && info.Size() >= checkpoint.Size {
+		start = checkpoint.Size
+	}
+	if start == info.Size() || lines <= 0 {
+		return nil, nil
+	}
+	cropped := false
+	if info.Size()-start > maxTailWindow {
+		start = info.Size() - maxTailWindow
+		cropped = true
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek managed log %q: %w", path, err)
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, maxTailWindow))
+	if err != nil {
+		return nil, fmt.Errorf("read managed log %q: %w", path, err)
+	}
+	if cropped {
+		if newline := bytes.IndexByte(contents, '\n'); newline >= 0 {
+			contents = contents[newline+1:]
+		}
+	}
+	return lastLines(contents, lines), nil
 }
 
 func tailManagedLog(path string, lines int) ([]byte, os.FileInfo, error) {

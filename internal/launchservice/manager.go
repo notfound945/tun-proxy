@@ -21,7 +21,7 @@ import (
 const launchctlPath = "/bin/launchctl"
 const maxCommandOutput = 64 << 10
 
-const serviceCommandTimeout = 60 * time.Second
+const serviceCommandTimeout = 20 * time.Second
 
 const (
 	InstallCommand   = "sudo tun-proxy service install"
@@ -118,7 +118,7 @@ func NewManager(layout Layout) *Manager {
 	runner := nativeRunner{}
 	manager := &Manager{
 		Layout: layout, Runner: runner, Accounts: newWorkerAccounts(runner), EffectiveUID: os.Geteuid, OwnerUID: 0,
-		PollInterval: 100 * time.Millisecond, StartTimeout: 60 * time.Second,
+		PollInterval: 100 * time.Millisecond, StartTimeout: 20 * time.Second,
 		StopTimeout: 50 * time.Second,
 	}
 	manager.Probe = manager.probeRuntime
@@ -726,7 +726,11 @@ func (manager *Manager) wait(ctx context.Context, timeout time.Duration, ready f
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("%s after %s", timeoutMessage, timeout)
+			phase := state.Phase
+			if phase == "" {
+				phase = "not-reported"
+			}
+			return fmt.Errorf("%s after %s (last state: running=%t pid=%d phase=%q)", timeoutMessage, timeout, state.Running, state.PID, phase)
 		case <-ticker.C:
 		}
 	}

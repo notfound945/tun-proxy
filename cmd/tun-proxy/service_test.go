@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +50,39 @@ func TestServiceCommandRejectsUnknownSubcommand(t *testing.T) {
 	err := serviceCommand([]string{"unknown"})
 	if err == nil || !strings.Contains(err.Error(), "unknown service command") {
 		t.Fatalf("serviceCommand() error = %v", err)
+	}
+}
+
+func TestServiceInstallCommandAddsLogsHintToArgumentError(t *testing.T) {
+	err := serviceInstallCommand(context.Background(), nil, []string{"unexpected"})
+	if err == nil || !strings.Contains(err.Error(), "unexpected arguments") {
+		t.Fatalf("serviceInstallCommand() error = %v", err)
+	}
+	if !strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("serviceInstallCommand() error = %q, want command %q", err, serviceLogsHintCommand)
+	}
+}
+
+func TestWithServiceLogsHintAddsCommandAndPreservesCause(t *testing.T) {
+	want := errors.New("install failed")
+	got := withServiceLogsHint(want)
+	if !errors.Is(got, want) {
+		t.Fatalf("withServiceLogsHint() error = %v, want wrapped %v", got, want)
+	}
+	if !strings.Contains(got.Error(), serviceLogsHintCommand) {
+		t.Fatalf("withServiceLogsHint() error = %q, want command %q", got, serviceLogsHintCommand)
+	}
+}
+
+func TestWithServiceLogsHintSkipsHelpAndDuplicateHint(t *testing.T) {
+	if got := withServiceLogsHint(flag.ErrHelp); !errors.Is(got, flag.ErrHelp) || strings.Contains(got.Error(), serviceLogsHintCommand) {
+		t.Fatalf("withServiceLogsHint(flag.ErrHelp) = %v", got)
+	}
+
+	once := withServiceLogsHint(errors.New("install failed"))
+	twice := withServiceLogsHint(once)
+	if count := strings.Count(twice.Error(), serviceLogsHintCommand); count != 1 {
+		t.Fatalf("service logs hint count = %d, want 1: %q", count, twice)
 	}
 }
 

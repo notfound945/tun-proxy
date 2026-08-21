@@ -89,13 +89,13 @@ func (runner *fakeRunner) Run(_ context.Context, executable string, args ...stri
 	return nil, nil
 }
 
-func TestManagerUsesSixtySecondStartTimeout(t *testing.T) {
+func TestManagerUsesTwentySecondStartTimeout(t *testing.T) {
 	manager := NewManager(DefaultLayout())
-	if manager.StartTimeout != 60*time.Second {
-		t.Fatalf("StartTimeout = %s, want 1m0s", manager.StartTimeout)
+	if manager.StartTimeout != 20*time.Second {
+		t.Fatalf("StartTimeout = %s, want 20s", manager.StartTimeout)
 	}
-	if serviceCommandTimeout != 60*time.Second {
-		t.Fatalf("serviceCommandTimeout = %s, want 1m0s", serviceCommandTimeout)
+	if serviceCommandTimeout != 20*time.Second {
+		t.Fatalf("serviceCommandTimeout = %s, want 20s", serviceCommandTimeout)
 	}
 }
 
@@ -204,7 +204,7 @@ func TestStartAcceptsKickstartCommandFailureAfterRuntimeBecomesReady(t *testing.
 func TestStartReportsKickstartFailureWhenRuntimeNeverBecomesReady(t *testing.T) {
 	layout := testLayout(t)
 	createInstalledArtifacts(t, layout, "binary", "config")
-	state := RuntimeState{}
+	state := RuntimeState{Running: true, PID: 42, Phase: "starting"}
 	runner := &fakeRunner{loaded: true, fail: func(call string) error {
 		if strings.Contains(call, " kickstart ") {
 			return errors.New("signal: killed")
@@ -215,6 +215,9 @@ func TestStartReportsKickstartFailureWhenRuntimeNeverBecomesReady(t *testing.T) 
 	err := manager.Start(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "signal: killed") || !strings.Contains(err.Error(), "did not become ready") {
 		t.Fatalf("Start() error = %v", err)
+	}
+	if !strings.Contains(err.Error(), `last state: running=true pid=42 phase="starting"`) {
+		t.Fatalf("Start() error = %v, want last observed runtime state", err)
 	}
 }
 
