@@ -100,3 +100,79 @@ func TestServiceInstallLogDiagnosticsIncludesOnlyCurrentAttempt(t *testing.T) {
 		}
 	}
 }
+
+func TestClearManagedLogsTruncatesSelectedFiles(t *testing.T) {
+	directory := t.TempDir()
+	stdoutPath := filepath.Join(directory, "stdout.log")
+	stderrPath := filepath.Join(directory, "stderr.log")
+	if err := os.WriteFile(stdoutPath, []byte("stdout contents\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stderrPath, []byte("stderr contents\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cleared, err := clearManagedLogs([]managedLog{{Name: "stderr", Path: stderrPath}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared) != 1 || cleared[0].Name != "stderr" {
+		t.Fatalf("clearManagedLogs() cleared = %+v, want stderr", cleared)
+	}
+	stderrContents, err := os.ReadFile(stderrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stderrContents) != 0 {
+		t.Fatalf("stderr after clear = %q, want empty", stderrContents)
+	}
+	stdoutContents, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stdoutContents) != "stdout contents\n" {
+		t.Fatalf("unselected stdout after clear = %q", stdoutContents)
+	}
+}
+
+func TestClearManagedLogsPreflightsAllPathsBeforeTruncating(t *testing.T) {
+	directory := t.TempDir()
+	regularPath := filepath.Join(directory, "stdout.log")
+	targetPath := filepath.Join(directory, "target.log")
+	symlinkPath := filepath.Join(directory, "stderr.log")
+	if err := os.WriteFile(regularPath, []byte("preserve me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte("target\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := clearManagedLogs([]managedLog{
+		{Name: "stdout", Path: regularPath},
+		{Name: "stderr", Path: symlinkPath},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("clearManagedLogs() error = %v, want unsafe path rejection", err)
+	}
+	contents, readErr := os.ReadFile(regularPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(contents) != "preserve me\n" {
+		t.Fatalf("preflight failure modified earlier log: %q", contents)
+	}
+}
+
+func TestClearManagedLogsTreatsMissingFilesAsAlreadyClear(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.log")
+	cleared, err := clearManagedLogs([]managedLog{{Name: "stderr", Path: missing}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared) != 0 {
+		t.Fatalf("clearManagedLogs() cleared = %+v, want none", cleared)
+	}
+}

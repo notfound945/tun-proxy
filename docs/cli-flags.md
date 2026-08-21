@@ -328,6 +328,9 @@ sudo tun-proxy service logs -lines 200
 sudo tun-proxy service logs -n 200 -stream stderr
 sudo tun-proxy service logs -follow -stream both
 sudo tun-proxy service logs -f -stream stdout
+sudo tun-proxy service logs -clear
+sudo tun-proxy service logs -clear -stream stderr
+sudo tun-proxy service logs -clear -follow
 ```
 
 | 参数 | 默认值 | 说明 |
@@ -336,10 +339,12 @@ sudo tun-proxy service logs -f -stream stdout
 | `-n N` | `100` | `-lines` 的别名。 |
 | `-follow` | `false` | 持续跟随新增日志内容。 |
 | `-f` | `false` | `-follow` 的别名。 |
-| `-stream stdout\|stderr\|both` | `both` | 选择要读取的托管日志流。 |
+| `-clear` | `false` | 清空所选日志；与 `-follow` 组合时，清空后继续等待新日志。 |
+| `-stream stdout\|stderr\|both` | `both` | 选择要读取、跟随或清理的托管日志流。 |
 
-跟随模式会持续运行直到被中断。该命令只读取固定的托管日志路径，并拒绝符号链接和
-非普通文件。
+跟随模式会持续运行直到被中断。`-clear` 会安全截断所选普通日志文件，不删除文件，
+因此正在运行的 launchd 服务可以继续写入；不存在的日志视为已经清空。该命令只操作
+固定的托管日志路径，并拒绝符号链接和非普通文件。
 
 ### `service upgrade`
 

@@ -357,10 +357,14 @@ sudo tun-proxy service restart
 sudo tun-proxy service reload
 sudo tun-proxy service logs -lines 100
 sudo tun-proxy service logs -follow -stream both
+sudo tun-proxy service logs -clear
+sudo tun-proxy service logs -clear -follow
 ```
 
 `service stop` 会回滚运行期间的系统状态但保留安装；`service reload` 仅接受可热重载的
-配置变化；日志跟随可通过 `Ctrl-C` 退出，不会停止服务。
+配置变化；日志跟随可通过 `Ctrl-C` 退出，不会停止服务。`service logs -clear` 会清空
+stdout 和 stderr，使用 `-stream stdout|stderr` 可只清理指定日志；与 `-follow` 组合时会
+先清空再等待新日志。
 
 ## 10. 更新二进制和配置
 

@@ -37,6 +37,7 @@ type managedLogCheckpoints map[string]managedLogCheckpoint
 type serviceLogsOptions struct {
 	lines  int
 	follow bool
+	clear  bool
 	stream string
 }
 
@@ -49,6 +50,7 @@ func newServiceLogsFlagSet(output io.Writer, options *serviceLogsOptions) *flag.
 	flags.IntVar(&options.lines, "n", 100, "alias for -lines")
 	flags.BoolVar(&options.follow, "follow", false, "follow appended log data")
 	flags.BoolVar(&options.follow, "f", false, "alias for -follow")
+	flags.BoolVar(&options.clear, "clear", false, "clear selected logs before exiting or following")
 	flags.StringVar(&options.stream, "stream", "both", "log `STREAM` (stdout, stderr, or both)")
 	return flags
 }
@@ -68,6 +70,21 @@ func serviceLogsCommand(ctx context.Context, layout launchservice.Layout, args [
 	logs, err := selectedManagedLogs(layout, strings.ToLower(options.stream))
 	if err != nil {
 		return err
+	}
+	if options.clear {
+		cleared, clearErr := clearManagedLogs(logs)
+		for _, log := range cleared {
+			fmt.Printf("cleared %s service log: %s\n", log.Name, log.Path)
+		}
+		if clearErr != nil {
+			return clearErr
+		}
+		if len(cleared) == 0 {
+			fmt.Println("selected service logs are already absent")
+		}
+		if !options.follow {
+			return nil
+		}
 	}
 	followers := make([]followedLog, 0, len(logs))
 	for _, log := range logs {
@@ -103,6 +120,72 @@ func selectedManagedLogs(layout launchservice.Layout, stream string) ([]managedL
 	default:
 		return nil, fmt.Errorf("service logs stream must be stdout, stderr, or both, got %q", stream)
 	}
+}
+
+func clearManagedLogs(logs []managedLog) ([]managedLog, error) {
+	type openedLog struct {
+		managedLog
+		File *os.File
+	}
+	opened := make([]openedLog, 0, len(logs))
+	closeOpened := func() {
+		for _, log := range opened {
+			_ = log.File.Close()
+		}
+	}
+	for _, log := range logs {
+		file, exists, err := openManagedLogForWrite(log.Path)
+		if err != nil {
+			closeOpened()
+			return nil, err
+		}
+		if exists {
+			opened = append(opened, openedLog{managedLog: log, File: file})
+		}
+	}
+
+	cleared := make([]managedLog, 0, len(opened))
+	var failures []error
+	for _, log := range opened {
+		if err := log.File.Truncate(0); err != nil {
+			failures = append(failures, fmt.Errorf("clear managed log %q: %w", log.Path, err))
+		} else if err := log.File.Sync(); err != nil {
+			failures = append(failures, fmt.Errorf("sync cleared managed log %q: %w", log.Path, err))
+		} else {
+			cleared = append(cleared, log.managedLog)
+		}
+		if err := log.File.Close(); err != nil {
+			failures = append(failures, fmt.Errorf("close cleared managed log %q: %w", log.Path, err))
+		}
+	}
+	return cleared, errors.Join(failures...)
+}
+
+func openManagedLogForWrite(path string) (*os.File, bool, error) {
+	before, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect managed log %q: %w", path, err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("managed log %q is not a regular file", path)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, false, fmt.Errorf("open managed log %q for clearing: %w", path, err)
+	}
+	after, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, false, fmt.Errorf("inspect opened managed log %q: %w", path, err)
+	}
+	if !os.SameFile(before, after) {
+		_ = file.Close()
+		return nil, false, fmt.Errorf("managed log %q changed while opening for clearing", path)
+	}
+	return file, true, nil
 }
 
 func checkpointManagedLogs(layout launchservice.Layout) managedLogCheckpoints {

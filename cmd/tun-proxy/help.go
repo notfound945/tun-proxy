@@ -167,6 +167,9 @@ the current runtime remains active.
 	"service logs": `usage: tun-proxy service logs [options]
 
 {{generated-options}}
+
+-clear truncates the selected stdout/stderr logs. Combine it with -follow to
+clear existing contents and then wait for new log entries.
 `,
 	"service upgrade": `usage: tun-proxy service upgrade [options]
 
