@@ -148,16 +148,123 @@ sudo tun-proxy service reload
 sudo tun-proxy service logs -follow
 ```
 
-安装后，CLI 使用的用户配置和 LaunchDaemon 使用的托管配置是两份独立文件。修改
-`~/.config/tun-proxy/config.yaml` 后，推荐通过 `reload -user-config` 先校验、同步，再热重载：
+## 快速配置
+
+### 1. 查看当前网口
+
+配置出口前先查看这台 Mac 实际存在的网口：
+
+```sh
+tun-proxy interfaces
+```
+
+不同 Mac 的网口名称可能不同，不要直接照搬示例中的 `en0`、`en7`。每个
+`outbounds.*.interface` 都应填写当前存在且可用的网口。
+
+### 2. 打开用户配置
+
+默认用户配置位于：
+
+```text
+~/.config/tun-proxy/config.yaml
+```
+
+安装脚本会在文件不存在时生成默认配置。也可以手动生成或在 Finder 中显示配置：
+
+```sh
+tun-proxy config -generate
+tun-proxy config -finder
+```
+
+已有配置时，`config -generate` 不会覆盖；确实需要恢复内置模板时使用
+`tun-proxy config -generate -force`。
+
+### 3. 配置出口和规则
+
+下面是双网口分流示例。请先把 `interface` 修改为当前 Mac 的真实网口：
+
+```yaml
+dns:
+  default_outbound: wired
+
+outbounds:
+  wifi:
+    type: direct
+    interface: en0
+    dns_source: dhcp
+    dns:
+      - "1.1.1.1:53"
+    fallback: reject
+
+  wired:
+    type: direct
+    interface: en7
+    dns_source: dhcp
+    dns:
+      - "9.9.9.9:53"
+    fallback: reject
+
+  reject:
+    type: reject
+
+rules:
+  - domain_suffix:
+      - cursor.sh
+      - claude.ai
+    outbound: wifi
+
+  - outbound: wired
+```
+
+配置时注意：
+
+- `outbounds` 中的 `wifi`、`wired` 是自定义出口名称，不要求和系统网口同名。
+- `interface` 才是实际网口，例如 `en0`、`en7`。
+- `dns_source: dhcp` 优先使用该网口的 DHCP DNS，配置的 `dns` 是必要的回退地址；
+  使用 `static` 时始终使用配置中的 DNS。
+- `rules` 按 YAML 顺序匹配，首条匹配规则生效，最后必须保留一条仅包含 `outbound` 的
+  默认规则。
+- `domain` 只匹配完整域名；`domain_suffix: claude.ai` 同时匹配 `claude.ai` 及
+  `downloads.claude.ai` 等子域名。
+- 一条规则还可以组合 `protocol`、`dst_port` 和 `ip_cidr`；同一规则中的不同条件需要
+  同时满足。
+- 不确定是否需要接管默认路由时，保持 `capture.default_route: false`。
+
+### 4. 校验并确认规则
+
+修改后先做离线校验：
 
 ```sh
 tun-proxy config validate
+```
+
+该命令检查 YAML、字段约束、出口引用、fallback 循环和规则结构，但不会确认当前网口是否
+在线。可以使用 `explain` 验证指定流量会命中哪个出口：
+
+```sh
+tun-proxy explain \
+  -domain downloads.claude.ai \
+  -protocol tcp \
+  -port 443
+```
+
+### 5. 应用配置
+
+首次安装服务时，`service install` 会把用户配置复制到托管目录并启动服务：
+
+```sh
+sudo tun-proxy service install
+```
+
+服务安装后，CLI 用户配置和 LaunchDaemon 托管配置是两份独立文件。再次修改
+`~/.config/tun-proxy/config.yaml` 后，使用下面的命令完成再次校验、事务同步和热重载：
+
+```sh
 sudo tun-proxy service reload -user-config
 ```
 
-`-user-config` 会自动选择调用 `sudo` 的用户目录下的
-`~/.config/tun-proxy/config.yaml`。需要使用其他文件时仍可明确指定：
+`-user-config` 会根据 `SUDO_USER` 自动选择调用 `sudo` 的用户配置，无需填写完整路径。
+需要应用其他配置文件时使用：
 
 ```sh
 sudo tun-proxy service reload \
@@ -165,8 +272,9 @@ sudo tun-proxy service reload \
 ```
 
 同步目标固定为 `/Library/Application Support/tun-proxy/config.yaml`。不可热重载的修改会
-在同步前被拒绝；运行时应用失败时会回滚托管配置并恢复原有运行配置。不带 `-config` 或
-`-user-config` 的 `service reload` 只重读现有托管配置，不会自动复制用户配置。
+在同步前被拒绝；运行时拒绝、超时或配置摘要不一致时，会回滚托管配置并恢复原有运行
+配置。不带 `-config` 或 `-user-config` 的 `service reload` 只重读现有托管配置，不会自动
+复制用户配置。
 
 ## 文档
 
