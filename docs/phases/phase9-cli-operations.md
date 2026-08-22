@@ -126,10 +126,12 @@ sudo tun-proxy service logs -lines 200
 sudo tun-proxy service logs -stream stderr -follow
 ```
 
-Stop performs a clean shutdown and waits for runtime state to be removed while
-leaving the installed launchd job available for a later explicit start.
-Restart performs that clean stop followed by the existing readiness-checked
-start. Reload signals the launchd job with `SIGHUP`, then waits for the worker
+Stop disables the launchd label, boots the job out of the system domain, and
+waits for the process/runtime state to be removed. Installed artifacts remain
+available for a later explicit start, which re-enables and bootstraps the job.
+This unload step prevents a `KeepAlive` policy from respawning a manually
+stopped service. Restart performs that clean stop followed by the existing
+readiness-checked start. Reload signals the launchd job with `SIGHUP`, then waits for the worker
 status socket to increment either the success or failure counter; immutable
 changes return the runtime rejection without replacing the active generation.
 

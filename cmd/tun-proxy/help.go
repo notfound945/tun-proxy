@@ -162,8 +162,10 @@ On failure, run "sudo tun-proxy service logs" to inspect managed stdout/stderr.
 `,
 	"service stop": `usage: tun-proxy service stop
 
-Stops the installed service cleanly.
-On failure, run "sudo tun-proxy service logs" to inspect managed stdout/stderr.
+Stops the installed service cleanly, disables its launchd label, and unloads
+its job so KeepAlive cannot start it again. The installed files are preserved;
+"sudo tun-proxy service start" re-enables and loads the job. On failure, run
+"sudo tun-proxy service logs" to inspect managed stdout/stderr.
 `,
 	"service restart": "usage: tun-proxy service restart\n",
 	"service reload": `usage: tun-proxy service reload [options]
@@ -190,6 +192,15 @@ clear existing contents and then wait for new log entries.
 	"service upgrade": `usage: tun-proxy service upgrade [options]
 
 {{generated-options}}
+
+If the service is ready before the upgrade, the replacement is started and
+checked for readiness; failure rolls back the installed artifacts and attempts
+to restore the previous service. If the service is stopped or not ready, the upgrade only
+replaces installed artifacts and leaves the job stopped and unloaded without a
+startup check. The launchd start-at-boot setting is preserved unless overridden.
+
+If an upgrade operation fails, inspect the managed logs with:
+  sudo tun-proxy service logs
 `,
 	"service uninstall": `usage: tun-proxy service uninstall [options]
 

@@ -864,7 +864,7 @@ sudo tun-proxy check
 tun-proxy config validate
 ```
 
-如果 YAML 有效但 reload 报某字段 `cannot be reloaded`，说明修改涉及主机网络、监听器、地址池或固定容量。可使用 `service upgrade -config ...` 事务性同步配置并重启，而不是继续尝试热重载。
+如果 YAML 有效但 reload 报某字段 `cannot be reloaded`，说明修改涉及主机网络、监听器、地址池或固定容量。可使用 `service upgrade -config ...` 事务性同步配置；升级前服务已就绪时会重启并验证新配置，原本未运行或未就绪时则保持 stopped/unloaded，需要随后显式执行 `service start`。不要继续尝试热重载不可热重载的字段。
 
 ### `config validate` 成功但 `check` 失败
 

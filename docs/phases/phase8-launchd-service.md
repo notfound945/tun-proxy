@@ -72,9 +72,12 @@ use a shell. With `-start-at-boot=true`, `RunAtLoad=true` starts a registered
 job and `KeepAlive.SuccessfulExit=false` restarts it after a non-successful
 exit. With the default policy, `RunAtLoad=false` and `KeepAlive` is omitted
 because launchd otherwise treats it as an implicit boot-start request. A normal
-`service stop` sends SIGTERM and lets tun-proxy restore its recorded system
-state. The hidden service entry point runs stale-state cleanup before a new
-process performs preflight.
+`service stop` disables the label and boots the job out of the system domain.
+The unload terminates the process, lets tun-proxy restore its recorded system
+state, and prevents `KeepAlive` from scheduling another spawn. A later
+`service start` re-enables, bootstraps, and readiness-checks the job. The hidden
+service entry point runs stale-state cleanup before a new process performs
+preflight.
 
 `upgrade` is a controlled stop-and-restart, not a hot reload: active flows are
 allowed to drain within the normal shutdown deadline; the loaded job is

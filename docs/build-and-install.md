@@ -361,8 +361,9 @@ sudo tun-proxy service logs -clear
 sudo tun-proxy service logs -clear -follow
 ```
 
-`service stop` 会回滚运行期间的系统状态但保留安装；`service reload` 仅接受可热重载的
-配置变化；日志跟随可通过 `Ctrl-C` 退出，不会停止服务。`service logs -clear` 会清空
+`service stop` 会回滚运行期间的系统状态，禁用并卸载 launchd job，以阻止 `KeepAlive`
+再次拉起进程，但会保留安装；后续 `service start` 会重新启用并加载 job。`service reload`
+仅接受可热重载的配置变化；日志跟随可通过 `Ctrl-C` 退出，不会停止服务。`service logs -clear` 会清空
 stdout 和 stderr，使用 `-stream stdout|stderr` 可只清理指定日志；与 `-follow` 组合时会
 先清空再等待新日志。
 
@@ -409,8 +410,10 @@ CLI 和托管服务是两份不同文件。再次执行 `install-release.sh` 只
 `/Library/PrivilegedHelperTools/cn.notfound945.tun-proxy`。已经安装或加载服务时应使用
 `service upgrade`，不要再次执行 `service install`。
 
-默认更新保留用户配置、托管配置和服务原来的运行/停止状态。明确需要同步用户配置或启动
-原本停止的服务时使用：
+默认更新保留用户配置、托管配置和服务原来的运行/停止状态。升级前已就绪的服务会使用
+新版本重启并接受 readiness 检查；升级前未运行或未就绪的服务只更新安装文件，并保持
+stopped/unloaded，不会因为当前网卡、上游等运行条件不满足而阻止升级。明确需要同步用户配置
+或启动原本停止的服务时使用：
 
 ```sh
 curl -fsSL \
@@ -452,8 +455,10 @@ sudo tun-proxy service upgrade \
   -config "$HOME/.config/tun-proxy/config.yaml"
 ```
 
-升级失败时会自动回滚到先前版本。不要直接覆盖 LaunchDaemon 正在使用的托管二进制。
-升级默认保留首次安装时选择的 `-start-at-boot` 策略；已有服务可通过
+升级前服务已就绪时，新版本会重启并接受 readiness 检查；启动失败会自动回滚到先前版本
+并尝试恢复旧服务。升级前服务未运行或未就绪时，只替换安装文件并保持 stopped/unloaded，
+不执行启动验证。不要直接覆盖 LaunchDaemon 正在使用的托管二进制。升级默认保留首次安装时
+选择的 `-start-at-boot` 策略；已有服务可通过
 `service upgrade -start-at-boot=true|false` 切换。
 
 ## 11. 卸载

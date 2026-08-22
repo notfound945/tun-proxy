@@ -101,6 +101,13 @@ type Status struct {
 	Runtime   RuntimeState `json:"runtime"`
 }
 
+// UpgradeResult describes whether an upgrade restarted and readiness-checked
+// the managed service. A service that was not ready before the upgrade remains
+// stopped and unloaded after its installed artifacts are replaced.
+type UpgradeResult struct {
+	Restarted bool
+}
+
 // ConfigUpdate is an activated managed-configuration replacement that must be
 // committed after runtime acknowledgement or rolled back after rejection.
 type ConfigUpdate struct {
@@ -345,17 +352,34 @@ func (manager *Manager) Stop(ctx context.Context) error {
 		if _, err := manager.Runner.Run(ctx, launchctlPath, "disable", "system/"+manager.Layout.Label); err != nil {
 			return fmt.Errorf("disable service before stopping: %w", err)
 		}
-	}
-	if !state.Running {
-		if state.Phase != "" && manager.Recover != nil {
-			return manager.Recover(ctx)
+		// Killing a loaded KeepAlive job is not a stop operation: launchd can
+		// schedule it again immediately after the process exits. Booting the job
+		// out both terminates the current process and removes the registration for
+		// the rest of this boot session. Start re-enables and bootstraps it later.
+		if _, err := manager.Runner.Run(ctx, launchctlPath, "bootout", "system/"+manager.Layout.Label); err != nil {
+			return fmt.Errorf("unload service while stopping: %w", err)
 		}
-		return nil
+		stillLoaded, err := manager.loaded(ctx)
+		if err != nil {
+			return err
+		}
+		if stillLoaded {
+			return errors.New("launchd job remains loaded after service stop")
+		}
 	}
-	if _, err := manager.Runner.Run(ctx, launchctlPath, "kill", "SIGTERM", "system/"+manager.Layout.Label); err != nil {
-		return fmt.Errorf("stop service: %w", err)
+	if state.Running {
+		if err := manager.wait(ctx, manager.StopTimeout, func(state RuntimeState) bool { return !state.Running }, "service process did not stop cleanly"); err != nil {
+			return err
+		}
 	}
-	return manager.wait(ctx, manager.StopTimeout, func(state RuntimeState) bool { return !state.Running && state.Phase == "" }, "service did not stop cleanly")
+	state, err = manager.Probe()
+	if err != nil {
+		return err
+	}
+	if state.Phase != "" && manager.Recover != nil {
+		return manager.Recover(ctx)
+	}
+	return nil
 }
 
 // Restart performs the same clean shutdown and readiness-checked startup used
@@ -375,14 +399,8 @@ func (manager *Manager) Restart(ctx context.Context) error {
 	if !installed {
 		return serviceNotInstalledError()
 	}
-	state, err := manager.Probe()
-	if err != nil {
+	if err := manager.Stop(ctx); err != nil {
 		return err
-	}
-	if state.Running || state.Phase != "" {
-		if err := manager.Stop(ctx); err != nil {
-			return err
-		}
 	}
 	return manager.Start(ctx)
 }
@@ -459,31 +477,37 @@ func (manager *Manager) Reload(ctx context.Context) error {
 	return nil
 }
 
-func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource string, startAtBoot *bool) (resultErr error) {
+func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource string, startAtBoot *bool) (result UpgradeResult, resultErr error) {
 	if err := manager.validate(); err != nil {
-		return err
+		return result, err
 	}
 	if err := manager.requireRoot(); err != nil {
-		return err
+		return result, err
 	}
 	installed, err := manager.installed()
 	if err != nil {
-		return err
+		return result, err
 	}
 	if !installed {
-		return serviceNotInstalledError()
+		return result, serviceNotInstalledError()
 	}
 	before, err := manager.Probe()
 	if err != nil {
-		return err
+		return result, err
 	}
-	wasLoaded, err := manager.loaded(ctx)
-	if err != nil {
-		return err
+	wasReady := before.Running && before.Phase == "running"
+	restoreReadyService := func(message string) error {
+		if !wasReady {
+			return nil
+		}
+		if err := manager.restartService(); err != nil {
+			return fmt.Errorf("%s: %w", message, err)
+		}
+		return nil
 	}
 	binaryStage, err := stageCopy(binarySource, manager.Layout.Binary, 0o755, maxInstalledFileSize)
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer os.Remove(binaryStage) //nolint:errcheck // Best-effort staging cleanup.
 	type stagedTarget struct{ stage, target string }
@@ -491,7 +515,7 @@ func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource 
 	if configSource != "" {
 		configStage, err := stageCopy(configSource, manager.Layout.Config, 0o600, privsep.MaxConfigSize)
 		if err != nil {
-			return err
+			return result, err
 		}
 		defer os.Remove(configStage) //nolint:errcheck // Best-effort staging cleanup.
 		staged = append(staged, stagedTarget{configStage, manager.Layout.Config})
@@ -500,48 +524,41 @@ func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource 
 	if startAtBoot == nil {
 		contents, err := os.ReadFile(manager.Layout.Plist)
 		if err != nil {
-			return fmt.Errorf("read installed launchd manifest: %w", err)
+			return result, fmt.Errorf("read installed launchd manifest: %w", err)
 		}
 		effectiveStartAtBoot, err = ManifestStartAtBoot(contents)
 		if err != nil {
-			return err
+			return result, err
 		}
 	} else {
 		effectiveStartAtBoot = *startAtBoot
 	}
 	manifest, err := Manifest(manager.Layout, effectiveStartAtBoot)
 	if err != nil {
-		return err
+		return result, err
 	}
 	plistStage, err := stageContents(manifest, manager.Layout.Plist, 0o644)
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer os.Remove(plistStage) //nolint:errcheck // Best-effort staging cleanup.
 	staged = append(staged, stagedTarget{plistStage, manager.Layout.Plist})
-	if before.Running || before.Phase != "" {
-		if err := manager.Stop(ctx); err != nil {
-			return err
-		}
-	}
-	if wasLoaded {
-		if _, err := manager.Runner.Run(ctx, launchctlPath, "bootout", "system/"+manager.Layout.Label); err != nil {
-			return errors.Join(fmt.Errorf("unload service for upgrade: %w", err), manager.restoreServiceState(before, wasLoaded))
-		}
+	if err := manager.Stop(ctx); err != nil {
+		return result, err
 	}
 	if err := ensureDirectory(manager.Layout.RuntimeDir, 0o755, manager.OwnerUID); err != nil {
-		return errors.Join(err, manager.restoreServiceState(before, wasLoaded))
+		return result, errors.Join(err, restoreReadyService("restore previous service after interrupted upgrade"))
 	}
 	identity, accountCreated, err := manager.Accounts.Ensure(ctx)
 	if err != nil {
-		return errors.Join(err, manager.restoreServiceState(before, wasLoaded))
+		return result, errors.Join(err, restoreReadyService("restore previous service after interrupted upgrade"))
 	}
 	storage, err := prepareWorkerStorage(manager.Layout, manager.OwnerUID, identity)
 	if err != nil {
 		if accountCreated {
 			err = errors.Join(err, manager.Accounts.Purge(context.Background()))
 		}
-		return errors.Join(err, manager.restoreServiceState(before, wasLoaded))
+		return result, errors.Join(err, restoreReadyService("restore previous service after interrupted upgrade"))
 	}
 	replacements := make([]replacement, 0, len(staged))
 	rollback := func() error {
@@ -571,24 +588,27 @@ func (manager *Manager) Upgrade(ctx context.Context, binarySource, configSource 
 		if accountCreated {
 			failures = append(failures, manager.Accounts.Purge(rollbackCtx))
 		}
-		failures = append(failures, manager.restoreServiceState(before, wasLoaded))
+		failures = append(failures, restoreReadyService("restore previous service after rollback"))
 		return errors.Join(failures...)
 	}
 	for _, item := range staged {
 		replaced, err := activateStage(item.stage, item.target, false)
 		if err != nil {
-			return rollbackAndRestore(err)
+			return result, rollbackAndRestore(err)
 		}
 		replacements = append(replacements, replaced)
 	}
-	if err := manager.restoreServiceState(before, wasLoaded); err != nil {
-		return rollbackAndRestore(err)
+	if wasReady {
+		if err := manager.restartService(); err != nil {
+			return result, rollbackAndRestore(fmt.Errorf("start upgraded service: %w", err))
+		}
+		result.Restarted = true
 	}
 	for index := range replacements {
 		resultErr = errors.Join(resultErr, replacements[index].commit())
 	}
 	storage.commit()
-	return resultErr
+	return result, resultErr
 }
 
 func (manager *Manager) Uninstall(ctx context.Context, purge bool) (resultErr error) {
@@ -602,27 +622,18 @@ func (manager *Manager) Uninstall(ctx context.Context, purge bool) (resultErr er
 	if err != nil {
 		return err
 	}
-	wasLoaded, err := manager.loaded(ctx)
-	if err != nil {
-		return err
-	}
 	if err := manager.Stop(ctx); err != nil {
 		return err
 	}
-	if wasLoaded {
-		if _, err := manager.Runner.Run(ctx, launchctlPath, "bootout", "system/"+manager.Layout.Label); err != nil {
-			return errors.Join(fmt.Errorf("unload service: %w", err), manager.restoreServiceState(before, wasLoaded))
-		}
-	}
 	if manager.Recover != nil {
 		if err := manager.Recover(ctx); err != nil {
-			return errors.Join(fmt.Errorf("recover service state before uninstall: %w", err), manager.restoreServiceState(before, wasLoaded))
+			return errors.Join(fmt.Errorf("recover service state before uninstall: %w", err), manager.restoreServiceState(before))
 		}
 	}
 	targets := []string{manager.Layout.Plist, manager.Layout.Binary}
 	if purge {
 		if _, err = manager.Accounts.Resolve(ctx); err != nil {
-			return errors.Join(fmt.Errorf("validate dedicated worker identity before purge: %w", err), manager.restoreServiceState(before, wasLoaded))
+			return errors.Join(fmt.Errorf("validate dedicated worker identity before purge: %w", err), manager.restoreServiceState(before))
 		}
 		targets = append(targets, manager.Layout.Config, manager.Layout.FakeIPv4, manager.Layout.FakeIPv6,
 			manager.Layout.StandardOut, manager.Layout.StandardErr)
@@ -633,7 +644,7 @@ func (manager *Manager) Uninstall(ctx context.Context, purge bool) (resultErr er
 		for index := len(removals) - 1; index >= 0; index-- {
 			failures = append(failures, removals[index].rollback())
 		}
-		failures = append(failures, manager.restoreServiceState(before, wasLoaded))
+		failures = append(failures, manager.restoreServiceState(before))
 		return errors.Join(failures...)
 	}
 	for _, target := range targets {
@@ -833,25 +844,13 @@ func (manager *Manager) restartService() error {
 	return manager.Start(ctx)
 }
 
-func (manager *Manager) restoreServiceState(before RuntimeState, wasLoaded bool) error {
+func (manager *Manager) restoreServiceState(before RuntimeState) error {
 	if before.Running {
 		return manager.restartService()
 	}
-	if !wasLoaded {
-		return nil
-	}
-	// Restore the observable "loaded but stopped" state by letting the old
-	// version become ready and then stopping it cleanly while leaving the
-	// launchd job registered. This works for either RunAtLoad policy.
-	timeout := manager.StartTimeout + manager.StopTimeout + 25*time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	if err := manager.Start(ctx); err != nil {
-		return fmt.Errorf("restore loaded service: %w", err)
-	}
-	if err := manager.Stop(ctx); err != nil {
-		return fmt.Errorf("restore stopped service: %w", err)
-	}
+	// A non-running KeepAlive job has no stable loaded/stopped state: launchd
+	// may already be waiting to spawn it again. Keep rollback safe by leaving
+	// such a service disabled and unloaded; the operator can explicitly start it.
 	return nil
 }
 

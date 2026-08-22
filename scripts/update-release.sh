@@ -27,7 +27,8 @@ usage() {
 
 更新过程先替换 /usr/local/bin/tun-proxy。检测到完整的托管服务安装后，
 还会执行事务性的 "tun-proxy service upgrade"，不会再次执行 service install。
-默认保留用户配置和当前托管配置，并保持服务原来的运行/停止状态。
+默认保留用户配置和当前托管配置。升级前已就绪的服务会重启并验证新版本；
+原本未运行或未就绪的服务保持 stopped/unloaded，升级过程不会尝试启动。
 
 可选环境变量:
   PREFIX=/usr/local

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hailinpan/tun-proxy/internal/launchservice"
 	"github.com/hailinpan/tun-proxy/internal/privsep"
 )
 
@@ -143,6 +144,64 @@ func TestWithServiceLogsHintAddsCommandAndPreservesCause(t *testing.T) {
 	}
 	if !strings.Contains(got.Error(), serviceLogsHintCommand) {
 		t.Fatalf("withServiceLogsHint() error = %q, want command %q", got, serviceLogsHintCommand)
+	}
+}
+
+type serviceUpgraderFunc func(context.Context, string, string, *bool) (launchservice.UpgradeResult, error)
+
+func (upgrade serviceUpgraderFunc) Upgrade(ctx context.Context, binary, config string, startAtBoot *bool) (launchservice.UpgradeResult, error) {
+	return upgrade(ctx, binary, config, startAtBoot)
+}
+
+func TestServiceUpgradeCommandAddsLogsHintOnUpgradeFailure(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "tun-proxy")
+	if err := os.WriteFile(binary, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("service did not become ready after 20s")
+	err := serviceUpgradeCommand(context.Background(), serviceUpgraderFunc(func(context.Context, string, string, *bool) (launchservice.UpgradeResult, error) {
+		return launchservice.UpgradeResult{}, want
+	}), []string{"-binary", binary})
+	if !errors.Is(err, want) {
+		t.Fatalf("serviceUpgradeCommand() error = %v, want wrapped %v", err, want)
+	}
+	if !strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("serviceUpgradeCommand() error = %q, want command %q", err, serviceLogsHintCommand)
+	}
+}
+
+func TestServiceUpgradeCommandRejectsArgumentsWithoutLogsHint(t *testing.T) {
+	upgraded := false
+	err := serviceUpgradeCommand(context.Background(), serviceUpgraderFunc(func(context.Context, string, string, *bool) (launchservice.UpgradeResult, error) {
+		upgraded = true
+		return launchservice.UpgradeResult{}, nil
+	}), []string{"unexpected"})
+	if err == nil || !strings.Contains(err.Error(), "unexpected arguments") {
+		t.Fatalf("serviceUpgradeCommand() error = %v", err)
+	}
+	if upgraded {
+		t.Fatal("service was upgraded before rejecting arguments")
+	}
+	if strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("argument error unexpectedly included logs hint: %q", err)
+	}
+}
+
+func TestServiceUpgradeSuccessMessageReflectsRestart(t *testing.T) {
+	tests := []struct {
+		name   string
+		result launchservice.UpgradeResult
+		want   string
+	}{
+		{name: "restarted", result: launchservice.UpgradeResult{Restarted: true}, want: "tun-proxy service upgraded and restarted"},
+		{name: "stopped", result: launchservice.UpgradeResult{}, want: "tun-proxy service upgraded; service remains stopped (startup not verified)"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := serviceUpgradeSuccessMessage(test.result); got != test.want {
+				t.Fatalf("serviceUpgradeSuccessMessage() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

@@ -71,7 +71,9 @@ launchd service label is already loaded
 
 `update-release.sh` 会先完成与快速安装相同的架构识别、下载和 SHA-256 校验，再检测托管
 服务：未安装服务时只更新 CLI；检测到完整安装时使用 `service upgrade` 事务性替换托管
-二进制，并保持服务原来的运行或停止状态。用户配置和已安装的托管配置默认都会保留。
+二进制，并保持服务原来的运行或停止状态。升级前已就绪的服务会重启并验证新版本；原本未运行
+或未就绪的服务会保持 stopped/unloaded，不会在升级过程中尝试启动。用户配置和已安装的托管
+配置默认都会保留。
 
 需要同时把 `~/.config/tun-proxy/config.yaml` 更新到托管配置时：
 
@@ -147,6 +149,10 @@ sudo tun-proxy service restart
 sudo tun-proxy service reload
 sudo tun-proxy service logs -follow
 ```
+
+`service stop` 会禁用并卸载 launchd job，避免 `KeepAlive` 在停止后继续重启进程；安装文件和
+配置仍会保留，执行 `service start` 即可重新 enable、bootstrap 并启动。日志文件不会因停止而
+清空，但停止成功后不应继续产生新的服务日志。
 
 ## 清理残留 DNS 与 Fake IP 持久化映射
 

@@ -33,7 +33,7 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 	if usage := renderedUsage("service install"); !strings.Contains(usage, "-start-at-boot") {
 		t.Fatalf("service install help missing boot-start flag: %s", usage)
 	}
-	for _, topic := range []string{"service start", "service stop", "service reload"} {
+	for _, topic := range []string{"service start", "service stop", "service reload", "service upgrade"} {
 		if usage := renderedUsage(topic); !strings.Contains(usage, serviceLogsHintCommand) {
 			t.Fatalf("%s help missing logs hint: %s", topic, usage)
 		}

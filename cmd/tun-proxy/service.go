@@ -104,7 +104,7 @@ func serviceStopCommand(ctx context.Context, stopper serviceStopper, args []stri
 	if err := stopper.Stop(ctx); err != nil {
 		return withServiceLogsHint(err)
 	}
-	fmt.Println("tun-proxy service stopped")
+	fmt.Println("tun-proxy service stopped and unloaded")
 	return nil
 }
 
@@ -433,7 +433,11 @@ func newServiceUpgradeFlagSet(output io.Writer, options *serviceUpgradeOptions) 
 	return flags
 }
 
-func serviceUpgradeCommand(ctx context.Context, manager *launchservice.Manager, args []string) error {
+type serviceUpgrader interface {
+	Upgrade(context.Context, string, string, *bool) (launchservice.UpgradeResult, error)
+}
+
+func serviceUpgradeCommand(ctx context.Context, manager serviceUpgrader, args []string) error {
 	options := serviceUpgradeOptions{}
 	flags := newServiceUpgradeFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
@@ -461,11 +465,19 @@ func serviceUpgradeCommand(ctx context.Context, manager *launchservice.Manager, 
 		}
 		startAtBoot = &value
 	}
-	if err := manager.Upgrade(ctx, binarySource, configSource, startAtBoot); err != nil {
-		return err
+	result, err := manager.Upgrade(ctx, binarySource, configSource, startAtBoot)
+	if err != nil {
+		return withServiceLogsHint(err)
 	}
-	fmt.Println("tun-proxy service upgraded")
+	fmt.Println(serviceUpgradeSuccessMessage(result))
 	return nil
+}
+
+func serviceUpgradeSuccessMessage(result launchservice.UpgradeResult) string {
+	if result.Restarted {
+		return "tun-proxy service upgraded and restarted"
+	}
+	return "tun-proxy service upgraded; service remains stopped (startup not verified)"
 }
 
 type serviceUninstallOptions struct{ purge bool }

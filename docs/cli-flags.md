@@ -297,8 +297,12 @@ sudo tun-proxy service start
 sudo tun-proxy service stop
 ```
 
-干净停止服务并保留安装状态，之后可以通过 `service start` 再次启动。该命令没有参数。停止失败时，
-错误信息会提示运行 `sudo tun-proxy service logs` 查看托管服务日志。
+干净停止服务，禁用对应的 launchd label，并将 job 从当前 system domain 卸载，从而阻止
+`KeepAlive` 在退出后再次拉起进程。安装文件和配置会保留；之后执行 `service start` 会重新
+enable、bootstrap 并等待服务就绪。停止成功后，`service status` 应显示 `loaded=false`、
+`running=false`。该命令没有参数。停止失败时，错误信息会提示运行
+`sudo tun-proxy service logs` 查看托管服务日志。日志文件中的历史内容不会被自动清空，但停止
+成功后不应继续追加新的服务日志。
 
 ### `service restart`
 
@@ -391,7 +395,16 @@ sudo tun-proxy service upgrade -start-at-boot=false
 | `-start-at-boot BOOL` | 保留当前设置 | 可选的开机自启策略变更。 |
 
 升级会以事务方式替换指定文件。默认保留已安装 plist 的开机自启策略；显式传入
-`-start-at-boot=true` 或 `false` 可切换。如果新服务未能就绪，则自动回滚。
+`-start-at-boot=true` 或 `false` 可切换。升级后的运行处理取决于升级开始前的状态：
+
+- 升级前服务处于 `running` 且已就绪：启动新版本并等待其就绪；新版本启动失败时回滚文件，
+  然后尝试恢复旧版本服务。
+- 升级前服务未运行或未就绪：只替换安装文件，不启动新版本，也不执行 readiness 检查；
+  升级完成后保持 stopped/unloaded。之后可显式执行 `sudo tun-proxy service start`，或由后续
+  launchd 启动流程按保留的策略加载。
+
+因此，网卡暂时不存在、上游当前不可用等配置或运行环境问题不会阻止一个原本未就绪的服务
+完成版本升级。若升级操作本身失败，可运行 `sudo tun-proxy service logs` 查看托管日志。
 
 ### `service uninstall`
 

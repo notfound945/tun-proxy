@@ -158,7 +158,10 @@ func TestServiceOperationsWithoutInstallationSuggestCompleteInstallCommand(t *te
 		"start":   func(manager *Manager) error { return manager.Start(context.Background()) },
 		"restart": func(manager *Manager) error { return manager.Restart(context.Background()) },
 		"reload":  func(manager *Manager) error { return manager.Reload(context.Background()) },
-		"upgrade": func(manager *Manager) error { return manager.Upgrade(context.Background(), "/unused/binary", "", nil) },
+		"upgrade": func(manager *Manager) error {
+			_, err := manager.Upgrade(context.Background(), "/unused/binary", "", nil)
+			return err
+		},
 	}
 	for name, operation := range operations {
 		t.Run(name, func(t *testing.T) {
@@ -260,7 +263,7 @@ func TestRestartStopsThenStartsRunningService(t *testing.T) {
 	state := RuntimeState{Running: true, PID: 42, Phase: "running"}
 	runner := &fakeRunner{loaded: true}
 	runner.onSuccess = func(call string) {
-		if strings.Contains(call, " kill SIGTERM ") {
+		if strings.Contains(call, " bootout ") {
 			state = RuntimeState{}
 		}
 		if strings.Contains(call, " kickstart ") {
@@ -271,8 +274,13 @@ func TestRestartStopsThenStartsRunningService(t *testing.T) {
 	if err := manager.Restart(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !containsCall(runner.calls, " kill SIGTERM ") || !containsCall(runner.calls, " kickstart ") {
+	if !containsCall(runner.calls, " disable system/"+layout.Label) ||
+		!containsCall(runner.calls, " bootout system/"+layout.Label) ||
+		!containsCall(runner.calls, " kickstart system/"+layout.Label) {
 		t.Fatalf("restart calls = %v", runner.calls)
+	}
+	if containsCall(runner.calls, " kill SIGTERM ") {
+		t.Fatalf("restart used kill instead of unloading the job: %v", runner.calls)
 	}
 	if state.PID != 43 || !state.Running {
 		t.Fatalf("restart state = %+v", state)
@@ -451,6 +459,48 @@ func TestFailedReinstallRestoresPreservedConfig(t *testing.T) {
 	}
 }
 
+func TestStopDisablesAndUnloadsRunningKeepAliveJob(t *testing.T) {
+	layout := testLayout(t)
+	state := RuntimeState{Running: true, PID: 42, Phase: "running"}
+	runner := &fakeRunner{loaded: true}
+	runner.onSuccess = func(call string) {
+		if strings.Contains(call, " bootout ") {
+			state = RuntimeState{}
+		}
+	}
+	manager := testManager(layout, runner, &state)
+
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.disabled || runner.loaded {
+		t.Fatalf("stop result disabled=%t loaded=%t calls=%v", runner.disabled, runner.loaded, runner.calls)
+	}
+	if countCalls(runner.calls, " bootout ") != 1 {
+		t.Fatalf("running service was not unloaded exactly once: %v", runner.calls)
+	}
+	if containsCall(runner.calls, " kill SIGTERM ") {
+		t.Fatalf("running service stop used kill instead of bootout: %v", runner.calls)
+	}
+}
+
+func TestStopUnloadsLoadedJobWithoutRuntimeState(t *testing.T) {
+	layout := testLayout(t)
+	state := RuntimeState{}
+	runner := &fakeRunner{loaded: true}
+	manager := testManager(layout, runner, &state)
+
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.disabled || runner.loaded {
+		t.Fatalf("stop result disabled=%t loaded=%t calls=%v", runner.disabled, runner.loaded, runner.calls)
+	}
+	if countCalls(runner.calls, " bootout ") != 1 {
+		t.Fatalf("loaded service without runtime state was not unloaded exactly once: %v", runner.calls)
+	}
+}
+
 func TestStopRecoversDeadStaleState(t *testing.T) {
 	layout := testLayout(t)
 	state := RuntimeState{Running: false, PID: 77, Phase: "running"}
@@ -488,11 +538,15 @@ func TestStopDisablesLoadedJobDuringCrashBackoff(t *testing.T) {
 	if !runner.disabled || recovered != 1 {
 		t.Fatalf("disabled=%t recovery calls=%d", runner.disabled, recovered)
 	}
-	if !containsCall(runner.calls, " disable system/"+layout.Label) {
+	if !containsCall(runner.calls, " disable system/"+layout.Label) ||
+		!containsCall(runner.calls, " bootout system/"+layout.Label) {
 		t.Fatalf("stop calls = %v", runner.calls)
 	}
+	if runner.loaded {
+		t.Fatalf("crash-backoff stop left launchd job loaded: %v", runner.calls)
+	}
 	if containsCall(runner.calls, " kill SIGTERM ") {
-		t.Fatalf("crash-backoff stop tried to signal a dead process: %v", runner.calls)
+		t.Fatalf("crash-backoff stop used kill instead of bootout: %v", runner.calls)
 	}
 }
 
@@ -540,7 +594,7 @@ func TestUpgradeRollsBackAndRestartsOldVersion(t *testing.T) {
 		return nil
 	}
 	runner.onSuccess = func(call string) {
-		if strings.Contains(call, " kill ") {
+		if strings.Contains(call, " bootout ") {
 			state = RuntimeState{}
 		}
 		if strings.Contains(call, " kickstart ") {
@@ -548,9 +602,15 @@ func TestUpgradeRollsBackAndRestartsOldVersion(t *testing.T) {
 		}
 	}
 	manager := testManager(layout, runner, &state)
-	err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), filepath.Clean(newConfig), nil)
+	result, err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), filepath.Clean(newConfig), nil)
 	if err == nil || !strings.Contains(err.Error(), "new version failed") {
 		t.Fatalf("Upgrade() error = %v", err)
+	}
+	if result.Restarted {
+		t.Fatal("failed upgrade unexpectedly reported a restarted service")
+	}
+	if !strings.Contains(err.Error(), "start upgraded service") {
+		t.Fatalf("Upgrade() error = %q, want upgraded-service context", err)
 	}
 	assertFile(t, layout.Binary, "old-binary", 0o755)
 	assertFile(t, layout.Config, "old-config", 0o600)
@@ -574,7 +634,7 @@ func TestUpgradeReplacesArtifactsAndRestarts(t *testing.T) {
 	state := RuntimeState{Running: true, PID: 88, Phase: "running"}
 	runner := &fakeRunner{loaded: true}
 	runner.onSuccess = func(call string) {
-		if strings.Contains(call, " kill ") {
+		if strings.Contains(call, " bootout ") {
 			state = RuntimeState{}
 		}
 		if strings.Contains(call, " kickstart ") {
@@ -582,8 +642,12 @@ func TestUpgradeReplacesArtifactsAndRestarts(t *testing.T) {
 		}
 	}
 	manager := testManager(layout, runner, &state)
-	if err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), filepath.Clean(newConfig), nil); err != nil {
+	result, err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), filepath.Clean(newConfig), nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !result.Restarted {
+		t.Fatal("running service upgrade did not report restart")
 	}
 	assertFile(t, layout.Binary, "new-binary", 0o755)
 	assertFile(t, layout.Config, "new-config", 0o600)
@@ -605,40 +669,140 @@ func TestUpgradeOverridesBootPolicy(t *testing.T) {
 	state := RuntimeState{}
 	manager := testManager(layout, &fakeRunner{}, &state)
 	startAtBoot := false
-	if err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), "", &startAtBoot); err != nil {
+	result, err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), "", &startAtBoot)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.Restarted {
+		t.Fatal("stopped service upgrade unexpectedly reported restart")
 	}
 	if got, err := ManifestStartAtBoot([]byte(readTestFile(t, layout.Plist))); err != nil || got {
 		t.Fatalf("overridden boot policy = %t, %v; want false", got, err)
 	}
 }
 
-func TestUpgradeRestoresLoadedStoppedState(t *testing.T) {
+func TestUpgradeLeavesLoadedStoppedServiceUnloadedWithoutStarting(t *testing.T) {
 	layout := testLayout(t)
 	createInstalledArtifacts(t, layout, "old-binary", "old-config")
+	writeInstalledManifest(t, layout, true)
 	newBinary := filepath.Join(filepath.Dir(layout.Binary), "../new-binary")
 	writeTestFile(t, filepath.Clean(newBinary), "new-binary", 0o755)
 	state := RuntimeState{}
 	runner := &fakeRunner{loaded: true}
-	runner.onSuccess = func(call string) {
+	runner.fail = func(call string) error {
 		if strings.Contains(call, " kickstart ") {
-			state = RuntimeState{Running: true, PID: 99, Phase: "running"}
+			return errors.New("service cannot start in the current environment")
 		}
-		if strings.Contains(call, " kill ") {
+		return nil
+	}
+	manager := testManager(layout, runner, &state)
+	result, err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Restarted {
+		t.Fatal("stopped service upgrade unexpectedly reported restart")
+	}
+	assertFile(t, layout.Binary, "new-binary", 0o755)
+	if runner.loaded || state.Running {
+		t.Fatalf("upgrade did not leave stopped service unloaded: loaded=%t state=%+v", runner.loaded, state)
+	}
+	for _, fragment := range []string{" bootstrap ", " kickstart ", " kill "} {
+		if containsCall(runner.calls, fragment) {
+			t.Fatalf("stopped service upgrade unexpectedly called %q: %v", fragment, runner.calls)
+		}
+	}
+	if countCalls(runner.calls, " bootout ") != 1 {
+		t.Fatalf("loaded stopped service was not unloaded exactly once: %v", runner.calls)
+	}
+	if startAtBoot, err := ManifestStartAtBoot([]byte(readTestFile(t, layout.Plist))); err != nil || !startAtBoot {
+		t.Fatalf("upgraded boot policy = %t, %v; want preserved true", startAtBoot, err)
+	}
+}
+
+func TestUpgradeLeavesRunningButNotReadyServiceStopped(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "old-binary", "old-config")
+	newBinary := filepath.Join(filepath.Dir(layout.Binary), "../new-binary")
+	writeTestFile(t, filepath.Clean(newBinary), "new-binary", 0o755)
+	state := RuntimeState{Running: true, PID: 88, Phase: "starting"}
+	runner := &fakeRunner{loaded: true}
+	runner.fail = func(call string) error {
+		if strings.Contains(call, " kickstart ") {
+			return errors.New("not-ready service must not be restarted")
+		}
+		return nil
+	}
+	runner.onSuccess = func(call string) {
+		if strings.Contains(call, " bootout ") {
 			state = RuntimeState{}
 		}
 	}
 	manager := testManager(layout, runner, &state)
-	if err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), "", nil); err != nil {
+	result, err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), "", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if result.Restarted {
+		t.Fatal("not-ready service upgrade unexpectedly reported restart")
+	}
 	assertFile(t, layout.Binary, "new-binary", 0o755)
-	if !runner.loaded || state.Running {
-		t.Fatalf("upgrade did not preserve loaded/stopped state: loaded=%t state=%+v", runner.loaded, state)
+	if runner.loaded || state.Running || state.Phase != "" {
+		t.Fatalf("not-ready service was not left stopped and unloaded: loaded=%t state=%+v", runner.loaded, state)
 	}
-	if !containsCall(runner.calls, " bootstrap ") || !containsCall(runner.calls, " kickstart ") || !containsCall(runner.calls, " kill ") {
-		t.Fatalf("loaded/stopped upgrade did not reload and stop job: %v", runner.calls)
+	if countCalls(runner.calls, " bootout ") != 1 {
+		t.Fatalf("not-ready service was not stopped and unloaded exactly once: %v", runner.calls)
 	}
+	if containsCall(runner.calls, " kill SIGTERM ") {
+		t.Fatalf("not-ready service upgrade used kill instead of bootout: %v", runner.calls)
+	}
+	if containsCall(runner.calls, " bootstrap ") || containsCall(runner.calls, " kickstart ") {
+		t.Fatalf("not-ready service was started during upgrade: %v", runner.calls)
+	}
+}
+
+func TestUpgradeFailureDistinguishesNewAndRollbackStartErrors(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "old-binary", "old-config")
+	newBinary := filepath.Join(filepath.Dir(layout.Binary), "../new-binary")
+	writeTestFile(t, filepath.Clean(newBinary), "new-binary", 0o755)
+	state := RuntimeState{Running: true, PID: 88, Phase: "running"}
+	kickstarts := 0
+	runner := &fakeRunner{loaded: true}
+	runner.fail = func(call string) error {
+		if strings.Contains(call, " kickstart ") {
+			kickstarts++
+			if kickstarts == 1 {
+				return errors.New("new service start failed")
+			}
+			return errors.New("old service restore failed")
+		}
+		return nil
+	}
+	runner.onSuccess = func(call string) {
+		if strings.Contains(call, " bootout ") {
+			state = RuntimeState{}
+		}
+	}
+	manager := testManager(layout, runner, &state)
+	_, err := manager.Upgrade(context.Background(), filepath.Clean(newBinary), "", nil)
+	if err == nil {
+		t.Fatal("Upgrade() succeeded despite both startup failures")
+	}
+	for _, fragment := range []string{
+		"start upgraded service",
+		"new service start failed",
+		"restore previous service after rollback",
+		"old service restore failed",
+	} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("Upgrade() error = %q, want %q", err, fragment)
+		}
+	}
+	if kickstarts != 2 {
+		t.Fatalf("kickstart attempts = %d, want 2", kickstarts)
+	}
+	assertFile(t, layout.Binary, "old-binary", 0o755)
 }
 
 func TestUninstallPreservesDataByDefault(t *testing.T) {
@@ -655,7 +819,7 @@ func TestUninstallPreservesDataByDefault(t *testing.T) {
 	state := RuntimeState{Running: true, PID: 101, Phase: "running"}
 	runner := &fakeRunner{loaded: true}
 	runner.onSuccess = func(call string) {
-		if strings.Contains(call, " kill ") {
+		if strings.Contains(call, " bootout ") {
 			state = RuntimeState{}
 		}
 	}
@@ -680,7 +844,7 @@ func TestUninstallPreservesDataByDefault(t *testing.T) {
 	}
 }
 
-func TestUninstallFailureRestoresLoadedStoppedService(t *testing.T) {
+func TestUninstallFailureLeavesPreviouslyStoppedServiceUnloaded(t *testing.T) {
 	layout := testLayout(t)
 	createInstalledArtifacts(t, layout, "binary", "config")
 	wantPlist := readTestFile(t, layout.Plist)
@@ -694,14 +858,6 @@ func TestUninstallFailureRestoresLoadedStoppedService(t *testing.T) {
 	}
 	state := RuntimeState{}
 	runner := &fakeRunner{loaded: true}
-	runner.onSuccess = func(call string) {
-		if strings.Contains(call, " kickstart ") {
-			state = RuntimeState{Running: true, PID: 111, Phase: "running"}
-		}
-		if strings.Contains(call, " kill ") {
-			state = RuntimeState{}
-		}
-	}
 	manager := testManager(layout, runner, &state)
 	manager.Recover = func(context.Context) error { return nil }
 	err := manager.Uninstall(context.Background(), true)
@@ -710,11 +866,14 @@ func TestUninstallFailureRestoresLoadedStoppedService(t *testing.T) {
 	}
 	assertFile(t, layout.Binary, "binary", 0o755)
 	assertFile(t, layout.Plist, wantPlist, 0o644)
-	if !runner.loaded || state.Running {
-		t.Fatalf("service state was not restored to loaded/stopped: loaded=%t state=%+v", runner.loaded, state)
+	if runner.loaded || state.Running {
+		t.Fatalf("previously stopped service was not left unloaded: loaded=%t state=%+v", runner.loaded, state)
 	}
-	if !containsCall(runner.calls, " kickstart ") || !containsCall(runner.calls, " kill ") {
-		t.Fatalf("loaded/stopped restoration did not start and stop service: %v", runner.calls)
+	if countCalls(runner.calls, " bootout ") != 1 {
+		t.Fatalf("previously stopped service was not unloaded exactly once: %v", runner.calls)
+	}
+	if containsCall(runner.calls, " bootstrap ") || containsCall(runner.calls, " kickstart ") {
+		t.Fatalf("uninstall rollback unexpectedly started a previously stopped service: %v", runner.calls)
 	}
 }
 
