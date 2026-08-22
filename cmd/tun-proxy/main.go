@@ -14,6 +14,8 @@ import (
 
 	"github.com/hailinpan/tun-proxy/internal/app"
 	"github.com/hailinpan/tun-proxy/internal/config"
+	"github.com/hailinpan/tun-proxy/internal/daemon"
+	"github.com/hailinpan/tun-proxy/internal/fakeip"
 	"github.com/hailinpan/tun-proxy/internal/interfaceinfo"
 	"github.com/hailinpan/tun-proxy/internal/launchservice"
 	runtimestatus "github.com/hailinpan/tun-proxy/internal/status"
@@ -312,9 +314,11 @@ func statusCommand(args []string) error {
 }
 
 type cleanupOptions struct {
-	statePath string
-	lockPath  string
-	timeout   time.Duration
+	configPath  string
+	statePath   string
+	lockPath    string
+	timeout     time.Duration
+	clearFakeIP bool
 }
 
 func newCleanupFlagSet(output io.Writer, options *cleanupOptions) *flag.FlagSet {
@@ -322,9 +326,11 @@ func newCleanupFlagSet(output io.Writer, options *cleanupOptions) *flag.FlagSet 
 		options = &cleanupOptions{}
 	}
 	flags := newCommandFlagSet("cleanup", output)
+	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "`PATH` to YAML configuration")
 	flags.StringVar(&options.statePath, "state", "/var/run/tun-proxy/state.json", "runtime state `PATH`")
 	flags.StringVar(&options.lockPath, "lock", "/var/run/tun-proxy/tun-proxy.lock", "fallback stale lock `PATH`")
 	flags.DurationVar(&options.timeout, "timeout", cleanupCommandTimeout, "maximum cleanup `DURATION`")
+	flags.BoolVar(&options.clearFakeIP, "clear-fake-ip", false, "remove configured Fake IP snapshots and journals")
 	return flags
 }
 
@@ -340,6 +346,22 @@ func cleanupCommand(args []string) error {
 	if options.timeout <= 0 {
 		return errors.New("cleanup timeout must be positive")
 	}
+	specified := make(map[string]bool)
+	flags.Visit(func(item *flag.Flag) { specified[item.Name] = true })
+	var runtime *config.Config
+	if options.clearFakeIP || specified["config"] {
+		var err error
+		runtime, err = config.LoadFile(options.configPath)
+		if err != nil {
+			return err
+		}
+		if !specified["state"] {
+			options.statePath = runtime.System.StateFile
+		}
+		if !specified["lock"] {
+			options.lockPath = runtime.System.LockFile
+		}
+	}
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, unix.SIGTERM)
 	defer stop()
 	cleanupCtx, cancel := context.WithTimeout(signalCtx, options.timeout)
@@ -347,8 +369,44 @@ func cleanupCommand(args []string) error {
 	if err := app.Cleanup(cleanupCtx, options.statePath, options.lockPath); err != nil {
 		return err
 	}
+	var removed []string
+	if options.clearFakeIP {
+		guard, err := daemon.Acquire(options.lockPath)
+		if err != nil {
+			return fmt.Errorf("refuse to clear Fake IP persistence while another instance may be starting or running: %w", err)
+		}
+		removed, err = clearFakeIPPersistence(runtime)
+		if closeErr := guard.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	for _, path := range removed {
+		fmt.Printf("removed Fake IP persistence %s\n", path)
+	}
 	fmt.Println("cleanup complete")
 	return nil
+}
+
+func clearFakeIPPersistence(runtime *config.Config) ([]string, error) {
+	if runtime == nil {
+		return nil, errors.New("runtime config is required to clear Fake IP persistence")
+	}
+	paths := []string{runtime.FakeIP.PersistenceFile}
+	if runtime.FakeIPv6 != nil {
+		paths = append(paths, runtime.FakeIPv6.PersistenceFile)
+	}
+	var removed []string
+	for _, path := range paths {
+		cleared, err := fakeip.ClearPersistence(path)
+		removed = append(removed, cleared...)
+		if err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
 }
 
 func printInterfaces() error {

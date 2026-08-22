@@ -145,3 +145,36 @@ func TestEngineCIDRRulePreservesOrderAndAllConstraints(t *testing.T) {
 		t.Fatalf("IPv6 decision = %+v, %v", decision, err)
 	}
 }
+
+func TestEngineRequiresFakeIPForDomainPredicates(t *testing.T) {
+	engine, err := New([]config.Rule{
+		{ID: 1, Domains: []string{"api.example.com"}, Protocol: "tcp", DestinationPorts: []uint16{443}, Outbound: "exact"},
+		{ID: 2, DomainSuffixes: []string{"video.example"}, Protocol: "udp", Outbound: "suffix"},
+		{ID: 3, Domains: []string{"both.example.com"}, DomainSuffixes: []string{"example.com"}, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, Outbound: "combined"},
+		{ID: 4, Protocol: "tcp", DestinationPorts: []uint16{22}, Outbound: "port-only"},
+		{ID: 5, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("2001:db8::/32")}, Outbound: "cidr-only"},
+		{ID: 6, Outbound: "default"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		domain string
+		want   bool
+	}{
+		{domain: "API.Example.COM.", want: true},
+		{domain: "video.example", want: true},
+		{domain: "cdn.video.example", want: true},
+		{domain: "notvideo.example", want: false},
+		{domain: "both.example.com", want: true},
+		{domain: "ordinary.example", want: false},
+		{domain: "invalid..example", want: false},
+	} {
+		t.Run(test.domain, func(t *testing.T) {
+			if got := engine.RequiresFakeIP(test.domain); got != test.want {
+				t.Fatalf("RequiresFakeIP(%q) = %t, want %t", test.domain, got, test.want)
+			}
+		})
+	}
+}

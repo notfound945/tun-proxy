@@ -80,6 +80,8 @@ outbounds:
   reject:
     type: reject
 
+# Domains selected by domain/domain_suffix rules receive Fake IPs. Other
+# domains are resolved to real addresses through dns.default_outbound.
 rules:
   - domain:
       - example.com
@@ -91,17 +93,5 @@ rules:
     dst_port:
       - 443
     outbound: wifi
-
-  - protocol: tcp
-    dst_port:
-      - 22
-    outbound: wired
-
-  # Phase 8.5: any resolved answer in either CIDR selects this rule. These
-  # documentation ranges do not affect ordinary public destinations.
-  - ip_cidr:
-      - 203.0.113.0/24
-      - 2001:db8::/32
-    outbound: wired
 
   - outbound: wifi

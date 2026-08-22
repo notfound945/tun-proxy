@@ -140,6 +140,50 @@ func (persistence *Persistence) Flush() error {
 	return persistence.pool.flushPersistence()
 }
 
+// ClearPersistence removes the active snapshot and write-ahead journal for one
+// Fake IP pool. Missing files are treated as success. Every existing target is
+// validated before either file is removed so unsafe paths cannot cause a
+// partial cleanup.
+func ClearPersistence(path string) ([]string, error) {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, fmt.Errorf("persistence path must be a clean absolute path: %q", path)
+	}
+	targets := []string{path, path + ".wal"}
+	existing := make([]string, 0, len(targets))
+	for _, target := range targets {
+		info, err := os.Lstat(target)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect Fake IP persistence %q: %w", target, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("Fake IP persistence target %q is not a regular file", target)
+		}
+		existing = append(existing, target)
+	}
+	if len(existing) == 0 {
+		return nil, nil
+	}
+	removed := make([]string, 0, len(existing))
+	var removeErr error
+	for _, target := range existing {
+		if err := os.Remove(target); err != nil {
+			removeErr = fmt.Errorf("remove Fake IP persistence %q: %w", target, err)
+			break
+		}
+		removed = append(removed, target)
+	}
+	var syncErr error
+	if len(removed) != 0 {
+		if err := syncDirectory(filepath.Dir(path)); err != nil {
+			syncErr = fmt.Errorf("sync Fake IP persistence directory: %w", err)
+		}
+	}
+	return removed, errors.Join(removeErr, syncErr)
+}
+
 func (persistence *Persistence) record(update persistenceUpdate, snapshot func() Snapshot) error {
 	record := journalRecord{
 		Version: persistenceVersion, Prefix: persistence.pool.prefix.String(), Epoch: persistence.journalEpoch,

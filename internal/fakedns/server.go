@@ -1,5 +1,5 @@
-// Package fakedns serves local UDP/TCP DNS and assigns family-matched Fake IP
-// addresses.
+// Package fakedns serves local UDP/TCP DNS, selectively assigns family-matched
+// Fake IP addresses, and forwards all other queries to an explicit resolver.
 package fakedns
 
 import (
@@ -35,6 +35,9 @@ type Config struct {
 	TTL           time.Duration
 	QueryTimeout  time.Duration
 	MaxConcurrent int
+	// ShouldFake selects normalized A/AAAA query names for Fake IP answers.
+	// A nil callback keeps the legacy behavior of assigning every domain.
+	ShouldFake func(domain string) bool
 }
 
 type Stats struct {
@@ -68,6 +71,7 @@ type runtimeConfig struct {
 	ttl          time.Duration
 	queryTimeout time.Duration
 	exclude      []domainname.Pattern
+	shouldFake   func(domain string) bool
 	upstream     Upstream
 }
 
@@ -116,7 +120,7 @@ func NewDualStack(config Config, ipv4Pool, ipv6Pool *fakeip.Pool, exclude []doma
 	}
 	server.runtime.Store(&runtimeConfig{
 		ttl: config.TTL, queryTimeout: config.QueryTimeout,
-		exclude: append([]domainname.Pattern(nil), exclude...), upstream: upstream,
+		exclude: append([]domainname.Pattern(nil), exclude...), shouldFake: config.ShouldFake, upstream: upstream,
 	})
 	return server, nil
 }
@@ -142,7 +146,9 @@ func (server *Server) ServeDNS(writer dns.ResponseWriter, request *dns.Msg) {
 		server.writeFailure(writer, request, dns.RcodeNameError)
 		return
 	}
-	if excluded(runtime.exclude, domain) || (question.Qtype != dns.TypeA && question.Qtype != dns.TypeAAAA) {
+	if excluded(runtime.exclude, domain) ||
+		(question.Qtype != dns.TypeA && question.Qtype != dns.TypeAAAA) ||
+		(runtime.shouldFake != nil && !runtime.shouldFake(domain)) {
 		server.forward(writer, request, runtime)
 		return
 	}
@@ -223,9 +229,21 @@ func excluded(patterns []domainname.Pattern, domain string) bool {
 	return false
 }
 
-// Reload atomically replaces query-time behavior. A query already in progress
-// keeps the resolver, exclusions, TTL and timeout snapshot it started with.
+// Reload atomically replaces resolver, exclusions, TTL and timeout while
+// preserving the current Fake IP selection policy.
 func (server *Server) Reload(ttl, queryTimeout time.Duration, exclude []domainname.Pattern, upstream Upstream) error {
+	return server.ReloadPolicy(ttl, queryTimeout, exclude, server.runtime.Load().shouldFake, upstream)
+}
+
+// ReloadPolicy atomically replaces all query-time behavior. A query already
+// in progress keeps the resolver, exclusions, policy, TTL and timeout snapshot
+// it started with. A nil policy preserves the legacy all-domains Fake IP mode.
+func (server *Server) ReloadPolicy(
+	ttl, queryTimeout time.Duration,
+	exclude []domainname.Pattern,
+	shouldFake func(domain string) bool,
+	upstream Upstream,
+) error {
 	if ttl <= 0 {
 		return errors.New("Fake DNS TTL must be positive")
 	}
@@ -237,7 +255,7 @@ func (server *Server) Reload(ttl, queryTimeout time.Duration, exclude []domainna
 	}
 	server.runtime.Store(&runtimeConfig{
 		ttl: ttl, queryTimeout: queryTimeout,
-		exclude: append([]domainname.Pattern(nil), exclude...), upstream: upstream,
+		exclude: append([]domainname.Pattern(nil), exclude...), shouldFake: shouldFake, upstream: upstream,
 	})
 	return nil
 }

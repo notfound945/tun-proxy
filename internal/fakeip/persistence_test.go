@@ -440,3 +440,62 @@ mappings:
 		t.Fatalf("OpenPersistence() = (%q, %v)", quarantined, err)
 	}
 }
+
+func TestClearPersistenceRemovesSnapshotAndJournal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fake-ip.yaml")
+	for _, target := range []string{path, path + ".wal"} {
+		if err := os.WriteFile(target, []byte("data"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := ClearPersistence(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 || removed[0] != path || removed[1] != path+".wal" {
+		t.Fatalf("removed = %v", removed)
+	}
+	for _, target := range removed {
+		if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("target %q still exists: %v", target, err)
+		}
+	}
+	removed, err = ClearPersistence(path)
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("idempotent clear = (%v, %v)", removed, err)
+	}
+}
+
+func TestClearPersistenceRejectsUnsafeTargetsBeforeRemoval(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "fake-ip.yaml")
+	journal := path + ".wal"
+	if err := os.Symlink(filepath.Join(directory, "elsewhere"), path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(journal, []byte("journal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClearPersistence(path); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("symlink clear error = %v", err)
+	}
+	if _, err := os.Stat(journal); err != nil {
+		t.Fatalf("journal was partially removed: %v", err)
+	}
+
+	directoryPath := filepath.Join(directory, "directory-target")
+	if err := os.Mkdir(directoryPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClearPersistence(directoryPath); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("directory clear error = %v", err)
+	}
+}
+
+func TestClearPersistenceRejectsUncleanPath(t *testing.T) {
+	for _, path := range []string{"", "relative.yaml", "/tmp/tun-proxy/../fake-ip.yaml"} {
+		if _, err := ClearPersistence(path); err == nil || !strings.Contains(err.Error(), "clean absolute path") {
+			t.Fatalf("ClearPersistence(%q) error = %v", path, err)
+		}
+	}
+}

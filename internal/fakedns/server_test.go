@@ -334,3 +334,106 @@ func availableAddress(t *testing.T) netip.AddrPort {
 	}
 	return netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port))
 }
+
+func TestServerSelectivelyFakesRuleDomains(t *testing.T) {
+	listen := availableAddress(t)
+	pool, err := fakeip.New(netip.MustParsePrefix("198.18.0.0/24"), time.Hour, 32, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := ExchangeFunc(func(_ context.Context, request *dns.Msg) (*dns.Msg, error) {
+		reply := new(dns.Msg)
+		reply.SetReply(request)
+		switch request.Question[0].Qtype {
+		case dns.TypeA:
+			reply.Answer = []dns.RR{&dns.A{
+				Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30},
+				A:   net.IPv4(192, 0, 2, 40),
+			}}
+		case dns.TypeAAAA:
+			reply.Answer = []dns.RR{&dns.AAAA{
+				Hdr:  dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 30},
+				AAAA: net.ParseIP("2001:db8::40"),
+			}}
+		}
+		return reply, nil
+	})
+	server, err := New(Config{
+		Listen: listen, UDP: true, TTL: time.Minute, MaxConcurrent: 8,
+		ShouldFake: func(domain string) bool { return domain == "special.example" },
+	}, pool, nil, upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := server.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = running.Close(t.Context()) })
+	client := &dns.Client{Net: "udp", Timeout: time.Second}
+
+	specialA := exchange(t, client, listen.String(), "special.example.", dns.TypeA)
+	if len(specialA.Answer) != 1 || !specialA.Answer[0].(*dns.A).A.Equal(net.IPv4(198, 18, 0, 10)) {
+		t.Fatalf("special A answer = %v", specialA.Answer)
+	}
+	ordinaryA := exchange(t, client, listen.String(), "ordinary.example.", dns.TypeA)
+	if len(ordinaryA.Answer) != 1 || !ordinaryA.Answer[0].(*dns.A).A.Equal(net.IPv4(192, 0, 2, 40)) {
+		t.Fatalf("ordinary A answer = %v", ordinaryA.Answer)
+	}
+	ordinaryAAAA := exchange(t, client, listen.String(), "ordinary.example.", dns.TypeAAAA)
+	if len(ordinaryAAAA.Answer) != 1 || !ordinaryAAAA.Answer[0].(*dns.AAAA).AAAA.Equal(net.ParseIP("2001:db8::40")) {
+		t.Fatalf("ordinary AAAA answer = %v", ordinaryAAAA.Answer)
+	}
+	specialAAAA := exchange(t, client, listen.String(), "special.example.", dns.TypeAAAA)
+	if len(specialAAAA.Answer) != 0 || specialAAAA.Rcode != dns.RcodeSuccess {
+		t.Fatalf("special AAAA answer = %v rcode=%d", specialAAAA.Answer, specialAAAA.Rcode)
+	}
+	stats := server.Stats()
+	if stats.FakeAnswers != 1 || stats.FakeIPv4Answers != 1 || stats.Forwarded != 2 || stats.NODATAAnswers != 1 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}
+
+func TestServerReloadPolicyAffectsNewQueries(t *testing.T) {
+	listen := availableAddress(t)
+	pool, err := fakeip.New(netip.MustParsePrefix("198.18.0.0/24"), time.Hour, 32, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := ExchangeFunc(func(_ context.Context, request *dns.Msg) (*dns.Msg, error) {
+		reply := new(dns.Msg)
+		reply.SetReply(request)
+		reply.Answer = []dns.RR{&dns.A{
+			Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30},
+			A:   net.IPv4(192, 0, 2, 50),
+		}}
+		return reply, nil
+	})
+	server, err := New(Config{
+		Listen: listen, UDP: true, TTL: time.Minute, MaxConcurrent: 8,
+		ShouldFake: func(string) bool { return false },
+	}, pool, nil, upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := server.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = running.Close(t.Context()) })
+	client := &dns.Client{Net: "udp", Timeout: time.Second}
+	before := exchange(t, client, listen.String(), "reload-policy.example.", dns.TypeA)
+	if !before.Answer[0].(*dns.A).A.Equal(net.IPv4(192, 0, 2, 50)) {
+		t.Fatalf("before reload = %v", before.Answer)
+	}
+	if err := server.ReloadPolicy(
+		2*time.Minute, time.Second, nil,
+		func(domain string) bool { return domain == "reload-policy.example" }, upstream,
+	); err != nil {
+		t.Fatal(err)
+	}
+	after := exchange(t, client, listen.String(), "reload-policy.example.", dns.TypeA)
+	if !after.Answer[0].(*dns.A).A.Equal(net.IPv4(198, 18, 0, 10)) {
+		t.Fatalf("after reload = %v", after.Answer)
+	}
+}

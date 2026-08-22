@@ -79,6 +79,8 @@ outbounds:
   reject:
     type: reject
 
+# Only explicit domain/domain_suffix rules receive Fake IPs. Ordinary domains
+# keep the real DHCP/static DNS answers from dns.default_outbound.
 rules:
   - domain_suffix:
       - cursor.sh

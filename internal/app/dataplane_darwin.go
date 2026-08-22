@@ -16,9 +16,10 @@ import (
 )
 
 type dataPlaneGeneration struct {
-	tcp  *session.TCP
-	udp  *session.UDP
-	refs atomic.Int64
+	tcp     *session.TCP
+	udp     *session.UDP
+	matcher *rules.Engine
+	refs    atomic.Int64
 }
 
 type dataPlane struct {
@@ -72,7 +73,15 @@ func buildDataPlaneGeneration(pools session.MappingPools, runtime *config.Config
 	if err != nil {
 		return nil, err
 	}
-	return &dataPlaneGeneration{tcp: tcp, udp: udp}, nil
+	return &dataPlaneGeneration{tcp: tcp, udp: udp, matcher: engine}, nil
+}
+
+func (generation *dataPlaneGeneration) shouldFake(domain string) bool {
+	return generation.matcher.RequiresFakeIP(domain)
+}
+
+func (plane *dataPlane) shouldFake(domain string) bool {
+	return plane.current.Load().shouldFake(domain)
 }
 
 func (plane *dataPlane) prepare(runtime *config.Config) (*dataPlaneGeneration, error) {

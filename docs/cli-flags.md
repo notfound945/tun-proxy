@@ -234,15 +234,21 @@ sudo tun-proxy cleanup
 sudo tun-proxy cleanup \
   -state /var/run/tun-proxy/state.json \
   -lock /var/run/tun-proxy/tun-proxy.lock
+sudo tun-proxy cleanup -clear-fake-ip \
+  -config ~/.config/tun-proxy/config.yaml
 ```
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `-state PATH` | `/var/run/tun-proxy/state.json` | 要恢复的已记录系统状态。 |
-| `-lock PATH` | `/var/run/tun-proxy/tun-proxy.lock` | 备用的陈旧进程锁路径。 |
+| `-config PATH` | `~/.config/tun-proxy/config.yaml` | 清理 Fake IP 时用于读取持久化、状态和锁路径的配置文件。 |
+| `-state PATH` | `/var/run/tun-proxy/state.json` | 要恢复的已记录系统状态；显式传入时覆盖配置值。 |
+| `-lock PATH` | `/var/run/tun-proxy/tun-proxy.lock` | 备用的陈旧进程锁路径；显式传入时覆盖配置值。 |
+| `-timeout DURATION` | `30s` | cleanup 的最大执行时间。 |
+| `-clear-fake-ip` | `false` | 删除配置的 IPv4/IPv6 Fake IP 快照和对应 `.wal`。 |
 
-异常退出后如残留已记录状态，可使用 `cleanup` 恢复。正常的前台退出和托管服务停止会自行
-恢复各自事务修改的系统状态。
+异常退出后如残留已记录状态，可使用 `cleanup` 恢复。`-clear-fake-ip` 会先恢复系统状态，
+然后持有实例锁再删除映射；实例仍在启动或运行时会拒绝清理。正常的前台退出和托管服务停止
+会自行恢复各自事务修改的系统状态，但不会自动删除 Fake IP 映射。
 
 ## 托管服务
 

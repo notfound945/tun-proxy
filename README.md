@@ -148,6 +148,17 @@ sudo tun-proxy service reload
 sudo tun-proxy service logs -follow
 ```
 
+## 清理 Fake IP 持久化映射
+
+停止前台实例或托管服务后，可以通过配置文件定位并删除 IPv4/IPv6 Fake IP 快照及 WAL：
+
+```sh
+sudo tun-proxy cleanup -clear-fake-ip \
+  -config ~/.config/tun-proxy/config.yaml
+```
+
+该命令会先执行系统状态恢复并持有实例锁；如果仍有实例正在启动或运行，会拒绝删除。
+
 ## 快速配置
 
 ### 1. 查看当前网口
@@ -226,9 +237,14 @@ rules:
   默认规则。
 - `domain` 只匹配完整域名；`domain_suffix: claude.ai` 同时匹配 `claude.ai` 及
   `downloads.claude.ai` 等子域名。
+- 命中任意显式 `domain` / `domain_suffix` 规则的域名会获得 Fake IP；未被域名规则选中的
+  普通域名通过 `dns.default_outbound` 的 DNS（`dns_source: dhcp` 时优先使用 DHCP DNS）
+  返回真实 IP。`fake_ip.exclude` 始终优先使用真实 DNS。
 - 一条规则还可以组合 `protocol`、`dst_port` 和 `ip_cidr`；同一规则中的不同条件需要
-  同时满足。
-- 不确定是否需要接管默认路由时，保持 `capture.default_route: false`。
+  同时满足。DNS 阶段无法得知协议、端口或真实目标 IP，因此这些条件不会单独触发 Fake IP。
+- `capture.default_route: false` 时，拿到真实 IP 的普通流量不会进入 TUN；如需让纯
+  `protocol`、`dst_port` 或 `ip_cidr` 规则覆盖这类流量，必须启用
+  `capture.default_route: true`。
 
 ### 4. 校验并确认规则
 
@@ -280,6 +296,7 @@ sudo tun-proxy service reload \
 
 - [本地开发、编译、安装与使用](docs/build-and-install.md)
 - [CLI 命令与参数](docs/cli-flags.md)
+- [`config.yaml` 完整配置参考](docs/config-reference.md)
 - [设计与实施计划](docs/plans/PLAN.md)
 - [阶段状态与剩余工作](docs/plans/STATUS.md)
 - [分阶段验收记录](docs/phases/)

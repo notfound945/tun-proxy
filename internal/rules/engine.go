@@ -75,6 +75,32 @@ func (engine *Engine) Match(metadata FlowMetadata) (Decision, error) {
 	return candidates[len(candidates)-1], nil
 }
 
+// RequiresFakeIP reports whether at least one non-default rule explicitly
+// selects the domain through domain or domain_suffix predicates. DNS queries
+// do not carry protocol, port, or resolved-address metadata, so those
+// predicates deliberately do not participate in this decision.
+func (engine *Engine) RequiresFakeIP(domain string) bool {
+	normalized, err := domainname.Normalize(domain)
+	if err != nil {
+		return false
+	}
+	for _, rule := range engine.rules {
+		if len(rule.domains) == 0 && len(rule.suffixes) == 0 {
+			continue
+		}
+		if len(rule.domains) != 0 {
+			if _, ok := rule.domains[normalized]; !ok {
+				continue
+			}
+		}
+		if len(rule.suffixes) != 0 && !matchesAnySuffix(normalized, rule.suffixes) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // Candidates returns CIDR-deferred rules whose non-IP predicates match,
 // followed by the first conclusive rule without CIDRs. The final default rule
 // guarantees at least one result. Session policy normally resolves through

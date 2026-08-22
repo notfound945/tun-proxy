@@ -80,3 +80,44 @@ func TestDataPlaneReloadKeepsActiveCIDRGenerationUntilFlowRelease(t *testing.T) 
 		t.Fatalf("released generation retained = %v", plane.retired)
 	}
 }
+
+func TestDataPlaneFakeDNSPolicyTracksCommittedRules(t *testing.T) {
+	pool, err := fakeip.New(netip.MustParsePrefix("198.18.0.0/24"), time.Hour, 32, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &config.Config{
+		Sessions: config.Sessions{UDPIdleTimeout: time.Minute, MaxUDPSessions: 8, MaxUDPSessionsPerSource: 4},
+		Outbounds: map[string]config.Outbound{
+			"direct": {Name: "direct", Type: "direct", Interface: "lo0", DNS: []netip.AddrPort{netip.MustParseAddrPort("1.1.1.1:53")}, ConnectTimeout: time.Second},
+		},
+		Rules: []config.Rule{
+			{ID: 1, Domains: []string{"first.example"}, Outbound: "direct"},
+			{ID: 2, Outbound: "direct"},
+		},
+	}
+	plane, err := newDataPlane(pool, nil, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plane.shouldFake("first.example") || plane.shouldFake("second.example") {
+		t.Fatal("initial Fake DNS policy does not match initial rules")
+	}
+
+	nextRuntime := *runtime
+	nextRuntime.Rules = []config.Rule{
+		{ID: 1, DomainSuffixes: []string{"second.example"}, Outbound: "direct"},
+		{ID: 2, Outbound: "direct"},
+	}
+	next, err := plane.prepare(&nextRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plane.shouldFake("first.example") || plane.shouldFake("second.example") {
+		t.Fatal("uncommitted rules changed the active Fake DNS policy")
+	}
+	plane.commit(next)
+	if plane.shouldFake("first.example") || !plane.shouldFake("api.second.example") {
+		t.Fatal("committed rules did not update the Fake DNS policy")
+	}
+}

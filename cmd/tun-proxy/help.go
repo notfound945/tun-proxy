@@ -130,6 +130,9 @@ file and status socket; without sudo it still reports available checks.
 	"cleanup": `usage: tun-proxy cleanup [options]
 
 {{generated-options}}
+
+-clear-fake-ip loads -config, restores recorded system state, verifies the
+instance lock is free, and removes configured IPv4/IPv6 snapshots and WALs.
 `,
 	"service": `usage: tun-proxy service <command> [options]
 

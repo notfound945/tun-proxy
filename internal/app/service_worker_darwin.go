@@ -149,8 +149,13 @@ func (worker *ServiceWorker) Prepare(ctx context.Context, bootstrap privsep.Boot
 		return fmt.Errorf("build Fake DNS forwarding resolver: %w", err)
 	}
 	dnsServer, err := fakedns.NewDualStack(fakedns.Config{
-		Listen: runtime.DNS.Listen, UDP: true, TCP: true, TTL: runtime.FakeIP.DNSTTL,
-		QueryTimeout: runtimeDNSQueryTimeout, MaxConcurrent: runtime.DNS.MaxConcurrent,
+		Listen:        runtime.DNS.Listen,
+		UDP:           true,
+		TCP:           true,
+		TTL:           runtime.FakeIP.DNSTTL,
+		QueryTimeout:  runtimeDNSQueryTimeout,
+		MaxConcurrent: runtime.DNS.MaxConcurrent,
+		ShouldFake:    plane.shouldFake,
 	}, fakePool, activeIPv6Pool, runtime.FakeIP.Exclude, forwardResolver)
 	if err != nil {
 		_ = stack.Close()

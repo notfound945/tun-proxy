@@ -139,8 +139,13 @@ func Run(ctx context.Context, runtime *config.Config, configDigest string, optio
 		return stats, fmt.Errorf("build Fake DNS forwarding resolver: %w", err)
 	}
 	dnsServer, err := fakedns.NewDualStack(fakedns.Config{
-		Listen: runtime.DNS.Listen, UDP: runtime.DNS.UDP, TCP: runtime.DNS.TCP,
-		TTL: runtime.FakeIP.DNSTTL, QueryTimeout: runtimeDNSQueryTimeout, MaxConcurrent: runtime.DNS.MaxConcurrent,
+		Listen:        runtime.DNS.Listen,
+		UDP:           runtime.DNS.UDP,
+		TCP:           runtime.DNS.TCP,
+		TTL:           runtime.FakeIP.DNSTTL,
+		QueryTimeout:  runtimeDNSQueryTimeout,
+		MaxConcurrent: runtime.DNS.MaxConcurrent,
+		ShouldFake:    dataPlane.shouldFake,
 	}, fakePool, activeFakeIPv6Pool, runtime.FakeIP.Exclude, forwardResolver)
 	if err != nil {
 		_ = closeStack()
