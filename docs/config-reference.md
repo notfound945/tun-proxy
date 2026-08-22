@@ -127,6 +127,20 @@ outbounds:
     type: reject
 
 rules:
+  - domain_suffix:
+      - claude.ai
+      - claude.com
+      - usefathom.com
+      - anthropic.com
+      - claudeusercontent.com
+      - claudemcpcontent.com
+      - claudemcpclient.com
+      - intercomcdn.com
+      - snapcraft.io
+      - intercom.io
+      - datadoghq.com
+    outbound: wifi
+
   - domain:
       - example.com
     outbound: wired

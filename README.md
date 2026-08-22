@@ -222,6 +222,16 @@ rules:
   - domain_suffix:
       - cursor.sh
       - claude.ai
+      - claude.com
+      - usefathom.com
+      - anthropic.com
+      - claudeusercontent.com
+      - claudemcpcontent.com
+      - claudemcpclient.com
+      - intercomcdn.com
+      - snapcraft.io
+      - intercom.io
+      - datadoghq.com
     outbound: wifi
 
   - outbound: wired

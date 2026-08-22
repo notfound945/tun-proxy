@@ -83,6 +83,20 @@ outbounds:
 # Domains selected by domain/domain_suffix rules receive Fake IPs. Other
 # domains are resolved to real addresses through dns.default_outbound.
 rules:
+  - domain_suffix:
+      - claude.ai
+      - claude.com
+      - usefathom.com
+      - anthropic.com
+      - claudeusercontent.com
+      - claudemcpcontent.com
+      - claudemcpclient.com
+      - intercomcdn.com
+      - snapcraft.io
+      - intercom.io
+      - datadoghq.com
+    outbound: wifi
+
   - domain:
       - example.com
     outbound: wired
