@@ -58,8 +58,6 @@ outbounds:
     type: reject
 rules:
   - domain: [Example.COM.]
-    protocol: tcp
-    dst_port: [443]
     outbound: secondary
   - outbound: primary
 `
@@ -315,7 +313,8 @@ func TestDecodeRejectsInvalidConfig(t *testing.T) {
 		{name: "missing DHCP DNS fallback", yaml: strings.Replace(validYAML, `    dns: ["1.1.1.1:53"]`, "    dns: []", 1), wantErr: "must configure at least one DNS server"},
 		{name: "missing static DNS list", yaml: strings.Replace(validYAML, `    dns: ["9.9.9.9:53"]`, "    dns: []", 1), wantErr: "must configure at least one DNS server"},
 		{name: "reject DNS source", yaml: strings.Replace(validYAML, "  reject:\n    type: reject", "  reject:\n    type: reject\n    dns_source: static", 1), wantErr: "cannot set interface, dns_source, dns"},
-		{name: "invalid port", yaml: strings.Replace(validYAML, "dst_port: [443]", "dst_port: [0]", 1), wantErr: "outside 1..65535"},
+		{name: "removed protocol field", yaml: strings.Replace(validYAML, "  - domain: [Example.COM.]", "  - domain: [Example.COM.]\n    protocol: tcp", 1), wantErr: "field protocol not found"},
+		{name: "removed destination port field", yaml: strings.Replace(validYAML, "  - domain: [Example.COM.]", "  - domain: [Example.COM.]\n    dst_port: [443]", 1), wantErr: "field dst_port not found"},
 		{name: "default not last", yaml: strings.Replace(validYAML, "rules:\n", "rules:\n  - outbound: primary\n", 1), wantErr: "must be last"},
 		{name: "fallback cycle", yaml: strings.Replace(validYAML, "fallback: reject", "fallback: secondary", 1), wantErr: "fallback cycle"},
 		{name: "multiple documents", yaml: validYAML + "---\nversion: 1\n", wantErr: "multiple documents"},

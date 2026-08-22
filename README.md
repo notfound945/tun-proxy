@@ -250,11 +250,13 @@ rules:
 - 命中任意显式 `domain` / `domain_suffix` 规则的域名会获得 Fake IP；未被域名规则选中的
   普通域名通过 `dns.default_outbound` 的 DNS（`dns_source: dhcp` 时优先使用 DHCP DNS）
   返回真实 IP。`fake_ip.exclude` 始终优先使用真实 DNS。
-- 一条规则还可以组合 `protocol`、`dst_port` 和 `ip_cidr`；同一规则中的不同条件需要
-  同时满足。DNS 阶段无法得知协议、端口或真实目标 IP，因此这些条件不会单独触发 Fake IP。
-- `capture.default_route: false` 时，拿到真实 IP 的普通流量不会进入 TUN；如需让纯
-  `protocol`、`dst_port` 或 `ip_cidr` 规则覆盖这类流量，必须启用
-  `capture.default_route: true`。
+- 规则还可以使用 `ip_cidr`，并与 `domain` / `domain_suffix` 组合；同一规则中的不同条件需要
+  同时满足。DNS 阶段尚未获得真实目标 IP，因此纯 `ip_cidr` 规则不会单独触发 Fake IP。
+- `capture.default_route: false` 时，拿到真实 IP 的普通流量和 literal-IP 流量不会进入
+  TUN；如需让纯 `ip_cidr` 规则覆盖这类流量，必须启用 `capture.default_route: true`。
+  但 `domain` / `domain_suffix` 与 `ip_cidr` 的组合规则不要求开启：显式域名条件会先让
+  该域名获得 Fake IP，流量进入 TUN 后再判断真实解析地址是否命中 CIDR。
+- 规则不再支持 `protocol` 和 `dst_port`；配置中保留这两个字段会被严格 YAML 校验拒绝。
 
 ### 4. 校验并确认规则
 
@@ -269,9 +271,7 @@ tun-proxy config validate
 
 ```sh
 tun-proxy explain \
-  -domain downloads.claude.ai \
-  -protocol tcp \
-  -port 443
+  -domain downloads.claude.ai
 ```
 
 ### 5. 应用配置

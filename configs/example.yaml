@@ -9,15 +9,16 @@ system:
   lock_file: /var/run/tun-proxy/tun-proxy.lock
   manage_dns: true
 
-# Phase 8.4 opt-in. When enabled, tun-proxy installs recorded split-default
-# routes only after proving physical-gateway and upstream-DNS bypass routes.
 capture:
+  # false 时只捕获 Fake IP 前缀流量。纯 ip_cidr 规则只有设为 true 后，
+  # 才能匹配普通真实 IP 或 literal-IP 流量。domain/domain_suffix 与
+  # ip_cidr 的组合规则在 false 时仍可生效，因为显式域名条件会分配 Fake IP。
   default_route: false
 
 tun:
   address: 10.255.0.2
   peer: 10.255.0.1
-  # Required together with fake_ipv6:
+  # 启用 fake_ipv6 时必须同时配置以下两个字段：
   # ipv6_address: fd00:7475:6e70:ffff::2
   # ipv6_peer: fd00:7475:6e70:ffff::1
   mtu: 1400
@@ -35,8 +36,8 @@ fake_ip:
     - "*.local"
     - "*.lan"
 
-# Phase 8.3 enables Fake AAAA only when this block and both tun.ipv6_* fields
-# are present. The TUN point-to-point pair must be outside this prefix.
+# 只有配置此区块及 tun.ipv6_address、tun.ipv6_peer 后，才会启用 Fake AAAA。
+# TUN 点对点地址必须位于此 Fake IPv6 前缀之外。
 # fake_ipv6:
 #   cidr: fd00:7475:6e70::/96
 #   max_mappings: 65536
@@ -59,7 +60,7 @@ outbounds:
   wifi:
     type: direct
     interface: en0
-    # DHCP DNS takes priority; this required list is the fallback.
+    # 优先使用该网卡的 DHCP DNS；以下必填列表作为发现失败时的回退地址。
     dns_source: dhcp
     dns:
       - "1.1.1.1:53"
@@ -70,7 +71,7 @@ outbounds:
   wired:
     type: direct
     interface: en5
-    # Static mode always uses this required list and ignores DHCP DNS.
+    # static 模式始终使用以下必填 DNS 列表，不读取 DHCP DNS。
     dns_source: static
     dns:
       - "9.9.9.9:53"
@@ -80,8 +81,10 @@ outbounds:
   reject:
     type: reject
 
-# Domains selected by domain/domain_suffix rules receive Fake IPs. Other
-# domains are resolved to real addresses through dns.default_outbound.
+# 规则只支持 domain、domain_suffix 和 ip_cidr。命中 domain/domain_suffix
+# 规则的域名会获得 Fake IP；其他域名通过 dns.default_outbound 解析真实地址。
+# 如果纯 ip_cidr 规则需要覆盖普通真实 IP 或 literal-IP 流量，必须将
+# capture.default_route 设为 true。
 rules:
   - domain_suffix:
       - claude.ai
@@ -103,9 +106,6 @@ rules:
 
   - domain_suffix:
       - video.example
-    protocol: udp
-    dst_port:
-      - 443
     outbound: wifi
 
   - outbound: wifi

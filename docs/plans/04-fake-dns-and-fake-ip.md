@@ -24,9 +24,10 @@ Fake IP 只是规则域名的本地代号，不能直接发送到公网。`fake_
   分别从独立的 IPv4/IPv6 地址池分配。
 - 未被域名规则选中的普通 A/AAAA 查询，以及所有非 A/AAAA 查询，都通过
   `dns.default_outbound` 的显式上游 DNS 转发并保留真实答案。
-- DNS 阶段没有协议、端口和已解析 IP 元数据，因此纯 `protocol`、`dst_port`、`ip_cidr`
-  规则不会触发 Fake IP。`capture.default_route: false` 时，这些普通真实 IP 流量绕过 TUN；
-  要让此类规则覆盖普通流量，必须启用 `capture.default_route: true`。
+- DNS 阶段没有已解析 IP 元数据，因此纯 `ip_cidr` 规则不会触发 Fake IP。
+  `capture.default_route: false` 时，这些普通真实 IP 和 literal-IP 流量绕过 TUN；要让纯
+  CIDR 规则覆盖它们，必须启用 `capture.default_route: true`。带 `domain` /
+  `domain_suffix` 条件的组合 CIDR 规则不受此限制，因为域名条件会先触发 Fake IP。
 - 禁止使用系统默认 Resolver 作为上游，否则会产生递归循环。
 - 上游查询具有超时、有限重试、UDP 截断后的 TCP 回退和容量限制。
 

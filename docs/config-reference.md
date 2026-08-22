@@ -63,6 +63,8 @@ system:
   restore_on_exit: true
 
 capture:
+  # false 时纯 ip_cidr 规则无法接管普通真实 IP/literal IP 流量；
+  # domain/domain_suffix + ip_cidr 组合规则仍可通过 Fake IP 进入 TUN。
   default_route: false
 
 tun:
@@ -147,11 +149,10 @@ rules:
 
   - domain_suffix:
       - video.example
-    protocol: udp
-    dst_port:
-      - 443
     outbound: wifi
 
+  # 纯 CIDR 示例：若要接管普通真实 IP/literal IP 流量，必须把
+  # capture.default_route 改为 true。
   - ip_cidr:
       - 203.0.113.0/24
       - 2001:db8::/32
@@ -262,6 +263,12 @@ capture:
 | --- | --- | --- | --- | --- |
 | `capture.default_route` | boolean | `false` | 否 | 是否安装分割默认路由，把普通真实 IP 流量也捕获到 TUN。 |
 
+> **与 `ip_cidr` 的关系：**不是所有包含 `ip_cidr` 的规则都要求开启此项。纯
+> `ip_cidr` 规则要接管普通真实 IP 或 literal-IP 流量时，必须设为 `true`，否则这些流量
+> 根本不会进入 TUN，规则引擎也就看不到它们。`domain` / `domain_suffix` 与 `ip_cidr` 的
+> 组合规则在 `false` 时仍可生效，因为显式域名条件会触发 Fake IP，使流量先进入 TUN，
+> 随后再用解析出的真实地址判断 CIDR。
+
 ### `default_route: false`
 
 这是默认且风险较低的模式：
@@ -269,7 +276,9 @@ capture:
 - 显式域名规则获得 Fake IP；Fake IP 前缀路由进入 TUN。
 - 未被域名规则选中的普通域名获得上游 DNS 返回的真实 IP。
 - 使用真实 IP 的普通流量继续走 macOS 原默认路由，不进入 TUN。
-- 因此，仅包含 `protocol`、`dst_port` 或 `ip_cidr` 的规则无法接管这部分普通流量。
+- literal-IP 流量同样不进入 TUN。
+- 因此，仅包含 `ip_cidr` 的规则无法接管上述流量；但带显式域名条件的组合 CIDR 规则
+  仍会通过 Fake IP 路径进入 TUN 并完成 CIDR 后匹配。
 
 ### `default_route: true`
 
@@ -434,23 +443,12 @@ dns:
 3. 其他普通域名转发给 `dns.default_outbound`，返回真实 IP。
 4. A/AAAA 以外的记录类型始终转发真实上游 DNS。
 
-DNS 请求本身没有 TCP/UDP 流的目标端口、传输协议或已解析目标 IP，因此在决定是否分配 Fake IP 时：
+DNS 请求尚未获得已解析目标 IP，因此在决定是否分配 Fake IP 时：
 
 - 会考虑规则的 `domain` 和 `domain_suffix`；
-- 不考虑 `protocol`、`dst_port`、`ip_cidr`。
+- 不考虑 `ip_cidr`。
 
-例如：
-
-```yaml
-rules:
-  - domain_suffix: [video.example]
-    protocol: udp
-    dst_port: [443]
-    outbound: wifi
-  - outbound: wired
-```
-
-`video.example` 的 DNS 请求仍会获得 Fake IP。实际流进入 TUN 后才使用 `protocol: udp` 和 `dst_port: 443` 做完整匹配；不满足完整条件的流量会继续匹配后续规则。
+例如，纯 `ip_cidr` 规则不会触发 Fake IP；包含显式域名条件的规则会先按域名条件决定是否分配 Fake IP，流量进入 TUN 并完成解析后再判断 CIDR。
 
 如果同一条规则同时配置 `domain` 和 `domain_suffix`，DNS 阶段也要求两个域名条件同时满足后才分配 Fake IP。
 
@@ -577,10 +575,8 @@ outbounds:
 rules:
   - domain_suffix:
       - example.com
-    protocol: tcp
-    dst_port:
-      - 443
-      - 8443
+    ip_cidr:
+      - 203.0.113.0/24
     outbound: wifi
 
   - outbound: wired
@@ -590,31 +586,30 @@ rules:
 | --- | --- | --- | --- |
 | `rules[].domain` | string list | 否 | 精确域名列表。 |
 | `rules[].domain_suffix` | string list | 否 | 域名后缀列表，同时匹配后缀本身和子域名。 |
-| `rules[].ip_cidr` | CIDR list | 否 | IPv4/IPv6 目标网段列表。必须写规范网络前缀。 |
-| `rules[].protocol` | string | 否 | 空、`tcp` 或 `udp`，值不区分大小写。 |
-| `rules[].dst_port` | integer list | 否 | 目标端口列表，每项范围 `1`–`65535`。 |
+| `rules[].ip_cidr` | CIDR list | 否 | IPv4/IPv6 目标网段列表。必须写规范网络前缀；纯 CIDR 规则要覆盖普通真实 IP/literal IP 流量时需要 `capture.default_route: true`。 |
 | `rules[].outbound` | string | 是 | 必须引用一个已定义的 outbound。 |
+
+`protocol` 和 `dst_port` 已移除；它们现在属于未知字段，配置校验会直接拒绝。
 
 ### 组合逻辑
 
-同一字段列表内部是 **OR**：
+同一字段列表内部是 **OR**。例如：
 
 ```yaml
-dst_port: [80, 443]
+ip_cidr: [203.0.113.0/24, 2001:db8::/32]
 ```
 
-表示目标端口为 80 或 443。
+表示任意一个解析地址落入其中任意网段即可满足 CIDR 条件。
 
 同一条规则的不同字段之间是 **AND**：
 
 ```yaml
 - domain_suffix: [example.com]
-  protocol: tcp
-  dst_port: [443]
+  ip_cidr: [203.0.113.0/24]
   outbound: wifi
 ```
 
-表示域名属于 `example.com`，并且协议为 TCP，并且目标端口为 443。
+表示域名属于 `example.com`，并且解析后的真实目标地址落入 `203.0.113.0/24`。
 
 如果一条规则同时配置 `domain` 和 `domain_suffix`，两个条件也必须同时满足。通常没有必要同时配置，除非确实需要取二者交集。
 
@@ -657,6 +652,16 @@ dst_port: [80, 443]
 
 域名流量命中含 `ip_cidr` 的候选规则时，程序会先通过候选出口解析域名；只要解析结果中的任意地址落入任意配置前缀，该 CIDR 条件就成立。如果最终规则选择了另一个 direct outbound，程序会通过最终出口重新解析，确保 DNS 缓存和 socket 绑定继续按出口隔离。
 
+运行时是否能执行 CIDR 匹配，首先取决于流量是否进入 TUN：
+
+- 纯 `ip_cidr` 规则不会触发 Fake IP。普通域名的真实 IP 流量和 literal-IP 流量只有在
+  `capture.default_route: true` 时才会被默认捕获路由送入 TUN。
+- `domain` / `domain_suffix` + `ip_cidr` 组合规则会由显式域名条件触发 Fake IP，因此即使
+  `capture.default_route: false`，仍可在流量进入 TUN 后按真实解析地址判断 CIDR。
+
+`tun-proxy explain -ip ...` 只模拟规则决策；它可以在 `default_route: false` 的配置下显示
+纯 CIDR 命中，但这不代表对应的真实 IP 流量在实际运行时会被系统路由送入 TUN。
+
 ### 默认规则
 
 必须恰好有一条不包含任何匹配条件的默认规则，并且必须放在最后：
@@ -679,13 +684,11 @@ rules:
 
 ### 验证规则决策
 
-离线检查域名、协议和端口：
+离线检查域名规则：
 
 ```sh
 tun-proxy explain \
-  -domain downloads.example.com \
-  -protocol tcp \
-  -port 443
+  -domain downloads.example.com
 ```
 
 模拟 CIDR 解析结果：
@@ -714,7 +717,7 @@ tun-proxy explain \
   -> 本地 DNS 判断 domain/domain_suffix 需要策略接管
   -> 返回 Fake A/AAAA
   -> Fake IP 前缀路由进入 TUN
-  -> 根据完整规则（域名、协议、端口、CIDR）选择 outbound
+  -> 根据完整规则（域名、CIDR）选择 outbound
   -> 通过目标物理网卡连接
 ```
 
@@ -734,14 +737,17 @@ tun-proxy explain \
 应用查询域名
   -> 本地 DNS 返回真实 IP
   -> /1 分割默认路由把连接送入 TUN
-  -> protocol / dst_port / ip_cidr 等规则可参与选择
+  -> ip_cidr 规则可参与选择
   -> 按规则对应 outbound 发出
 ```
 
 因此：
 
 - 只想代理明确域名、普通流量保持系统默认路径时，使用 `capture.default_route: false`。
-- 需要让纯端口、协议或 CIDR 规则覆盖普通真实 IP 流量时，使用 `capture.default_route: true`，并先执行 `sudo tun-proxy check`。
+- 需要让纯 CIDR 规则覆盖普通真实 IP 或 literal-IP 流量时，使用
+  `capture.default_route: true`，并先执行 `sudo tun-proxy check`。
+- 只使用 `domain` / `domain_suffix` + `ip_cidr` 组合规则时，不必为 CIDR 匹配单独开启
+  `capture.default_route`；显式域名条件已经提供 Fake IP 捕获路径。
 
 ## 16. 热重载矩阵
 
@@ -810,9 +816,10 @@ dns_source: dhcp
 
 并查看启动日志中的 `effective DNS`。如果接口没有发现到 DHCP DNS，程序会使用该 outbound 的 YAML `dns` 列表。
 
-### 纯端口或 CIDR 规则没有命中普通流量
+### 纯 CIDR 规则没有命中普通流量
 
-默认 `capture.default_route: false` 时，真实 IP 流量不进入 TUN。需要捕获这类流量时启用：
+默认 `capture.default_route: false` 时，普通真实 IP 和 literal-IP 流量不进入 TUN，因此纯
+`ip_cidr` 规则看不到这些流量。需要捕获这类流量时启用：
 
 ```yaml
 capture:

@@ -165,7 +165,7 @@ func (udpSession *UDP) Handle(ctx context.Context, flow netstack.UDPFlow, client
 	defer release()
 	metadata := rules.FlowMetadata{
 		Domain: domain, DestinationIP: flow.DestinationIP, SourceIP: flow.SourceIP,
-		SourcePort: flow.SourcePort, DestinationPort: flow.DestinationPort, Protocol: "udp",
+		SourcePort: flow.SourcePort,
 	}
 	var literal netip.Addr
 	if domain == "" {

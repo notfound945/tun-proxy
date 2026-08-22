@@ -12,8 +12,6 @@ rules:
     ip_cidr:
       - 203.0.113.0/24
       - 2001:db8::/32
-    protocol: tcp
-    dst_port: [80, 443]
     outbound: wired
 
   - outbound: wifi
@@ -22,14 +20,21 @@ rules:
 Prefixes must be canonical IPv4 or IPv6 CIDRs. Duplicate prefixes within one
 rule are removed. IPv4-mapped IPv6 and prefixes containing host bits are
 rejected. Fields within one rule are conjunctive; multiple domains, suffixes,
-ports, and CIDRs are alternatives within their respective field.
+and CIDRs are alternatives within their respective field.
+
+A pure `ip_cidr` rule does not allocate a Fake IP. To apply it to ordinary
+real-IP or literal-IP traffic, `capture.default_route` must be `true` so that
+the traffic reaches the TUN. A rule combining `domain` or `domain_suffix` with
+`ip_cidr` can still work while default-route capture is disabled: the explicit
+domain predicate allocates the Fake IP, and the CIDR is evaluated after the
+flow enters the TUN and the real destination is resolved.
 
 ## Decision contract
 
 For a domain-backed flow:
 
-1. Match domain, protocol, and port without treating an unresolved CIDR as a
-   success or failure.
+1. Match domain predicates without treating an unresolved CIDR as a success or
+   failure.
 2. Resolve through the conclusive non-CIDR candidate outbound. If it is
    reject-only, an earlier base-matching direct CIDR candidate may supply the
    isolated resolver. If every possible winner is reject, stop without I/O.
@@ -179,24 +184,18 @@ rules:
     ip_cidr:
       - 192.0.2.10/32       # replace with each current A answer
       - 2001:db8::10/128    # replace with each current AAAA answer
-    protocol: tcp
-    dst_port: [80, 443]
     outbound: wired
 
   # Literal-IP request: match immediately without DNS.
   - ip_cidr:
       - 192.0.2.10/32       # same current A answers
       - 2001:db8::10/128    # same current AAAA answers
-    protocol: tcp
-    dst_port: [80, 443]
     outbound: wired
 
   # Pre-resolution candidate for the two hostnames.
   - domain:
       - example.net
       - speed.cloudflare.com
-    protocol: tcp
-    dst_port: [80, 443]
     outbound: wifi
 
   - outbound: wifi
@@ -210,8 +209,6 @@ rules:
   - domain:
       - example.net
       - speed.cloudflare.com
-    protocol: tcp
-    dst_port: [80, 443]
     outbound: wifi
 
   - outbound: wifi

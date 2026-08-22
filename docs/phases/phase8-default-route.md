@@ -43,10 +43,10 @@ its routes are treated as already removed by the kernel; an equally specific
 route now selected on another interface is left untouched.
 
 Direct-IP TCP and UDP sessions carry an empty domain plus the literal
-destination. Domain predicates cannot match such flows; protocol, destination
-port, and the final default rule can. The selected outbound dials the literal
-address directly and does not invoke DNS. Recoverable socket failures may use
-the already validated fallback chain.
+destination. Domain predicates cannot match such flows; CIDR and the final
+default rule can. The selected outbound dials the literal address directly and
+does not invoke DNS. Recoverable socket failures may use the already validated
+fallback chain.
 
 While capture is active, outbound topology is immutable across SIGHUP. After a
 sleep or interface change, the process re-proves the recorded bypass plan. A
@@ -118,8 +118,8 @@ After `run` becomes ready, verify:
   configured direct interface select that physical interface and gateway.
 - Each configured upstream DNS address has an exact host route through its
   recorded physical gateway.
-- TCP and connected UDP to literal IPv4 destinations follow protocol/port or
-  default policy without a Fake IP mapping.
+- TCP and connected UDP to literal IPv4 destinations follow CIDR or default
+  policy without a Fake IP mapping.
 - When native IPv6 is available, repeat with an IPv6 literal and confirm the
   two IPv6 split routes.
 - Packet capture on utun shows ingress, while the selected physical interface

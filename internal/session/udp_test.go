@@ -28,7 +28,7 @@ func (dialer *fakePacketDialer) DialPacket(_ context.Context, destination netip.
 
 func TestUDPHandleRelaysFirstDatagramAndExpires(t *testing.T) {
 	pool := &fakePool{domain: "echo.example"}
-	matcher, err := rules.New([]config.Rule{{ID: 1, Protocol: "udp", Outbound: "primary"}, {ID: 2, Outbound: "reject"}})
+	matcher, err := rules.New([]config.Rule{{ID: 1, Domains: []string{"echo.example"}, Outbound: "primary"}, {ID: 2, Outbound: "reject"}})
 	if err != nil {
 		t.Fatal(err)
 	}

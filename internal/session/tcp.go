@@ -151,12 +151,10 @@ func (tcpSession *TCP) Handle(ctx context.Context, flow netstack.TCPFlow, client
 	defer release()
 
 	metadata := rules.FlowMetadata{
-		Domain:          domain,
-		DestinationIP:   flow.DestinationIP,
-		SourceIP:        flow.SourceIP,
-		SourcePort:      flow.SourcePort,
-		DestinationPort: flow.DestinationPort,
-		Protocol:        "tcp",
+		Domain:        domain,
+		DestinationIP: flow.DestinationIP,
+		SourceIP:      flow.SourceIP,
+		SourcePort:    flow.SourcePort,
 	}
 	var literal netip.Addr
 	if domain == "" {

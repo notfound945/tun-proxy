@@ -111,13 +111,11 @@ type Rule struct {
 	Domains          []string
 	DomainSuffixes   []string
 	DestinationCIDRs []netip.Prefix
-	Protocol         string
-	DestinationPorts []uint16
 	Outbound         string
 }
 
 func (r Rule) Default() bool {
-	return len(r.Domains) == 0 && len(r.DomainSuffixes) == 0 && len(r.DestinationCIDRs) == 0 && r.Protocol == "" && len(r.DestinationPorts) == 0
+	return len(r.Domains) == 0 && len(r.DomainSuffixes) == 0 && len(r.DestinationCIDRs) == 0
 }
 
 type DomainPattern = domainname.Pattern
@@ -205,8 +203,6 @@ type rawRule struct {
 	Domain       []string `yaml:"domain"`
 	DomainSuffix []string `yaml:"domain_suffix"`
 	IPCIDR       []string `yaml:"ip_cidr"`
-	Protocol     string   `yaml:"protocol"`
-	DstPort      []int    `yaml:"dst_port"`
 	Outbound     string   `yaml:"outbound"`
 }
 
@@ -725,10 +721,7 @@ func compileRules(raw []rawRule, outbounds map[string]Outbound) ([]Rule, error) 
 		if _, ok := outbounds[value.Outbound]; !ok {
 			return nil, fmt.Errorf("rule %d references undefined outbound %q", index+1, value.Outbound)
 		}
-		rule := Rule{ID: index + 1, Outbound: value.Outbound, Protocol: strings.ToLower(value.Protocol)}
-		if rule.Protocol != "" && !oneOf(rule.Protocol, "tcp", "udp") {
-			return nil, fmt.Errorf("rule %d has unsupported protocol %q", rule.ID, value.Protocol)
-		}
+		rule := Rule{ID: index + 1, Outbound: value.Outbound}
 		for _, domain := range value.Domain {
 			normalized, err := domainname.Normalize(domain)
 			if err != nil {
@@ -752,12 +745,6 @@ func compileRules(raw []rawRule, outbounds map[string]Outbound) ([]Rule, error) 
 				return nil, fmt.Errorf("rule %d ip_cidr prefix %q is not canonical; use %s", rule.ID, rawPrefix, prefix.Masked())
 			}
 			rule.DestinationCIDRs = appendUniquePrefix(rule.DestinationCIDRs, prefix)
-		}
-		for _, port := range value.DstPort {
-			if port < 1 || port > 65535 {
-				return nil, fmt.Errorf("rule %d destination port %d is outside 1..65535", rule.ID, port)
-			}
-			rule.DestinationPorts = appendUniquePort(rule.DestinationPorts, uint16(port))
 		}
 		if rule.Default() {
 			defaultCount++

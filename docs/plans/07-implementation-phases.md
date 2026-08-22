@@ -195,7 +195,7 @@
   DNS 恢复为真实上游，Fake IP 路由回到默认路由，`utun7`、53 端口监听、状态文件和
   锁均无残留。计划单列的明文 HTTP 请求仍待补测。
 - 2026-08-18：Phase 5 代码与 fallback 实机测试通过，等待双网卡成功出口抓包。已实现顺序规则、
-  domain/domain_suffix/protocol/dst_port/default 匹配、direct/reject、受限 fallback、
+  domain/domain_suffix/default 匹配、direct/reject、受限 fallback、
   多 A 记录逐个连接，以及按出口隔离且绑定同一接口的 Resolver TTL 缓存。NXDOMAIN、
   无 A 记录和连接拒绝不会触发 fallback；接口消失、无路由和超时才允许 fallback。
   实机中 `example.com` 首选 `en7`，该接口连接超时后约 10 秒正确 fallback 至 `en0`
@@ -302,7 +302,9 @@
 - 2026-08-18：Phase 8.5 解析后 IP/CIDR 规则实现完成。配置新增 canonical IPv4/IPv6
   `ip_cidr`，规则引擎与 TCP/UDP 会话完成候选出口解析、任一地址 CIDR 后匹配、出口变化
   重解析和不可变最终决策；resolver/dial fallback 不改写策略，literal IP 跳过 DNS，reload
-  generation 保持新旧 flow 隔离。自动化门禁完成后进入 root 双接口路由 smoke。
+  generation 保持新旧 flow 隔离。纯 CIDR 规则要观察普通真实 IP/literal-IP 流量必须启用
+  `capture.default_route`；域名与 CIDR 组合规则可通过 Fake IP 路径进入 TUN。自动化门禁完成后
+  进入 root 双接口路由 smoke。
 - 2026-08-18：Phase 8.5 自动化门禁已通过，root 验收尚未执行，状态保持 pending。为在
   另一台 Mac 继续，已补充跨机器交接清单：重新识别双出口接口/网关/DNS、动态获取测试
   域名的 A/AAAA（不复用旧 `/32`/`/128`）、抓取候选出口 DNS 与 CIDR 选中出口的重解析和

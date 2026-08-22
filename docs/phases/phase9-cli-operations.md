@@ -66,9 +66,7 @@ remain the responsibility of `check` / `check -service`.
 
 ```sh
 tun-proxy explain \
-  -domain api.cursor.sh \
-  -protocol tcp \
-  -port 443
+  -domain api.cursor.sh
 
 tun-proxy explain \
   -domain example.com \

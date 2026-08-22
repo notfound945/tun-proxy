@@ -12,13 +12,11 @@ import (
 
 // FlowMetadata is the complete immutable input to one rules decision.
 type FlowMetadata struct {
-	Domain          string
-	FakeIP          netip.Addr
-	DestinationIP   netip.Addr
-	SourceIP        netip.Addr
-	SourcePort      uint16
-	DestinationPort uint16
-	Protocol        string
+	Domain        string
+	FakeIP        netip.Addr
+	DestinationIP netip.Addr
+	SourceIP      netip.Addr
+	SourcePort    uint16
 }
 
 type Decision struct {
@@ -31,8 +29,6 @@ type compiledRule struct {
 	domains  map[string]struct{}
 	suffixes []string
 	cidrs    []netip.Prefix
-	protocol string
-	ports    map[uint16]struct{}
 	outbound string
 }
 
@@ -49,19 +45,14 @@ func New(configRules []config.Rule) (*Engine, error) {
 	for _, rule := range configRules {
 		item := compiledRule{
 			id:       rule.ID,
-			protocol: rule.Protocol,
 			outbound: rule.Outbound,
 			domains:  make(map[string]struct{}, len(rule.Domains)),
-			ports:    make(map[uint16]struct{}, len(rule.DestinationPorts)),
 		}
 		for _, domain := range rule.Domains {
 			item.domains[domain] = struct{}{}
 		}
 		item.suffixes = append([]string(nil), rule.DomainSuffixes...)
 		item.cidrs = append([]netip.Prefix(nil), rule.DestinationCIDRs...)
-		for _, port := range rule.DestinationPorts {
-			item.ports[port] = struct{}{}
-		}
 		compiled = append(compiled, item)
 	}
 	return &Engine{rules: compiled}, nil
@@ -77,8 +68,8 @@ func (engine *Engine) Match(metadata FlowMetadata) (Decision, error) {
 
 // RequiresFakeIP reports whether at least one non-default rule explicitly
 // selects the domain through domain or domain_suffix predicates. DNS queries
-// do not carry protocol, port, or resolved-address metadata, so those
-// predicates deliberately do not participate in this decision.
+// do not carry resolved-address metadata, so CIDR predicates deliberately do
+// not participate in this decision.
 func (engine *Engine) RequiresFakeIP(domain string) bool {
 	normalized, err := domainname.Normalize(domain)
 	if err != nil {
@@ -107,13 +98,13 @@ func (engine *Engine) RequiresFakeIP(domain string) bool {
 // the conclusive outbound, but can use an earlier resolvable candidate when
 // that outbound is reject-only.
 func (engine *Engine) Candidates(metadata FlowMetadata) ([]Decision, error) {
-	domain, protocol, err := normalizeMetadata(metadata)
+	domain, err := normalizeMetadata(metadata)
 	if err != nil {
 		return nil, err
 	}
 	var candidates []Decision
 	for _, rule := range engine.rules {
-		if !matchesBase(rule, domain, protocol, metadata.DestinationPort) {
+		if !matchesBase(rule, domain) {
 			continue
 		}
 		candidates = append(candidates, Decision{RuleID: rule.id, Outbound: rule.outbound})
@@ -137,7 +128,7 @@ func (engine *Engine) MatchResolved(metadata FlowMetadata, addresses []netip.Add
 }
 
 func (engine *Engine) match(metadata FlowMetadata, addresses []netip.Addr, resolved bool) (Decision, error) {
-	domain, protocol, err := normalizeMetadata(metadata)
+	domain, err := normalizeMetadata(metadata)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -147,7 +138,7 @@ func (engine *Engine) match(metadata FlowMetadata, addresses []netip.Addr, resol
 				continue
 			}
 		}
-		if !matchesBase(rule, domain, protocol, metadata.DestinationPort) {
+		if !matchesBase(rule, domain) {
 			continue
 		}
 		return Decision{RuleID: rule.id, Outbound: rule.outbound}, nil
@@ -155,27 +146,14 @@ func (engine *Engine) match(metadata FlowMetadata, addresses []netip.Addr, resol
 	return Decision{}, errors.New("no rule matched; final default rule invariant was violated")
 }
 
-func normalizeMetadata(metadata FlowMetadata) (string, string, error) {
-	domain := ""
-	if metadata.Domain != "" {
-		normalized, err := domainname.Normalize(metadata.Domain)
-		if err != nil {
-			return "", "", err
-		}
-		domain = normalized
+func normalizeMetadata(metadata FlowMetadata) (string, error) {
+	if metadata.Domain == "" {
+		return "", nil
 	}
-	return domain, strings.ToLower(metadata.Protocol), nil
+	return domainname.Normalize(metadata.Domain)
 }
 
-func matchesBase(rule compiledRule, domain, protocol string, destinationPort uint16) bool {
-	if rule.protocol != "" && rule.protocol != protocol {
-		return false
-	}
-	if len(rule.ports) != 0 {
-		if _, ok := rule.ports[destinationPort]; !ok {
-			return false
-		}
-	}
+func matchesBase(rule compiledRule, domain string) bool {
 	if len(rule.domains) != 0 {
 		if _, ok := rule.domains[domain]; !ok {
 			return false

@@ -103,16 +103,10 @@ rules:
 
   - domain_suffix:
       - video.example
-    protocol: udp
-    dst_port:
-      - 443
     outbound: wifi
 
-  - protocol: tcp
-    dst_port:
-      - 22
-    outbound: wired
-
+  # Pure CIDR rules need capture.default_route: true to observe ordinary
+  # real-IP/literal-IP traffic. Domain + CIDR rules can use the Fake-IP path.
   - ip_cidr:
       - 203.0.113.0/24
       - 2001:db8::/32
@@ -128,6 +122,8 @@ rules:
 - 启动前把 duration、地址、前缀和端口编译成强类型运行时配置。
 - `rules[].ip_cidr` 只接受 canonical IPv4/IPv6 CIDR；同一规则内重复前缀去重，
   IPv4-mapped IPv6 与带 host bits 的非规范前缀拒绝加载。
+- 纯 `ip_cidr` 规则要覆盖普通真实 IP/literal-IP 流量时必须启用
+  `capture.default_route`；带显式域名条件的组合 CIDR 规则可由 Fake IP 路径捕获。
 - 以 `*` 开头的 YAML 字符串必须加引号，例如 `"*.local"`。
 - 原始 YAML 结构不得直接进入业务模块。
 - 编译后的运行时配置应尽量不可变，并通过原子指针供新流读取。

@@ -137,9 +137,7 @@ sudo tun-proxy check -service
 
 ```sh
 tun-proxy explain \
-  -domain api.cursor.sh \
-  -protocol tcp \
-  -port 443
+  -domain api.cursor.sh
 ```
 
 使用一个或多个显式地址模拟解析后的 CIDR 策略：
@@ -167,8 +165,6 @@ tun-proxy explain \
 | `-config PATH` | `~/.config/tun-proxy/config.yaml` | 用于评估的 YAML 配置。 |
 | `-domain NAME` | 空 | 目标域名；除非至少提供一个 `-ip`，否则必须指定。 |
 | `-ip ADDRESS` | 无 | 已解析或直接使用的 IP 地址；可重复指定多个地址。 |
-| `-protocol tcp\|udp` | `tcp` | 流量协议。 |
-| `-port PORT` | `443` | 目标端口，范围为 1–65535。 |
 | `-family ipv4\|ipv6` | `ipv4` | `-resolve` 使用的地址族。 |
 | `-resolve` | `false` | 查询配置中绑定接口的上游 DNS。 |
 | `-timeout DURATION` | `10s` | 大于零的 DNS 解析超时时间。 |

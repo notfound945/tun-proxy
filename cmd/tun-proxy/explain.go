@@ -38,11 +38,9 @@ func (values *addressList) Set(raw string) error {
 }
 
 type explainInput struct {
-	Domain   string   `json:"domain,omitempty"`
-	IPs      []string `json:"ips,omitempty"`
-	Protocol string   `json:"protocol"`
-	Port     uint16   `json:"port"`
-	Family   string   `json:"family,omitempty"`
+	Domain string   `json:"domain,omitempty"`
+	IPs    []string `json:"ips,omitempty"`
+	Family string   `json:"family,omitempty"`
 }
 
 type explainRule struct {
@@ -50,8 +48,6 @@ type explainRule struct {
 	Domains          []string `json:"domains,omitempty"`
 	DomainSuffixes   []string `json:"domain_suffixes,omitempty"`
 	DestinationCIDRs []string `json:"destination_cidrs,omitempty"`
-	Protocol         string   `json:"protocol,omitempty"`
-	DestinationPorts []uint16 `json:"destination_ports,omitempty"`
 	Outbound         string   `json:"outbound"`
 	DeferredUntilDNS bool     `json:"deferred_until_dns"`
 }
@@ -86,8 +82,6 @@ type explainResult struct {
 type explainOptions struct {
 	configPath string
 	domain     string
-	protocol   string
-	port       int
 	family     string
 	resolve    bool
 	timeout    time.Duration
@@ -102,8 +96,6 @@ func newExplainFlagSet(output io.Writer, options *explainOptions) *flag.FlagSet 
 	flags := newCommandFlagSet("explain", output)
 	flags.StringVar(&options.configPath, "config", defaultUserConfigPath(), "YAML configuration `PATH`")
 	flags.StringVar(&options.domain, "domain", "", "destination `NAME`")
-	flags.StringVar(&options.protocol, "protocol", "tcp", "flow `PROTOCOL` (tcp or udp)")
-	flags.IntVar(&options.port, "port", 443, "destination `PORT`")
 	flags.StringVar(&options.family, "family", "ipv4", "resolution `FAMILY` (ipv4 or ipv6)")
 	flags.BoolVar(&options.resolve, "resolve", false, "resolve through configured interface-bound DNS")
 	flags.DurationVar(&options.timeout, "timeout", 10*time.Second, "DNS resolution `DURATION`")
@@ -123,13 +115,6 @@ func explainCommand(args []string) error {
 	}
 	if options.domain == "" && len(options.addresses) == 0 {
 		return errors.New("explain requires -domain or at least one -ip")
-	}
-	options.protocol = strings.ToLower(options.protocol)
-	if options.protocol != "tcp" && options.protocol != "udp" {
-		return fmt.Errorf("protocol must be tcp or udp, got %q", options.protocol)
-	}
-	if options.port < 1 || options.port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535, got %d", options.port)
 	}
 	options.family = strings.ToLower(options.family)
 	if options.family != "ipv4" && options.family != "ipv6" {
@@ -151,7 +136,7 @@ func explainCommand(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), options.timeout)
 	defer cancel()
-	result, err := explainFlow(ctx, runtime, options.configPath, options.domain, options.addresses, options.protocol, uint16(options.port), options.family, options.resolve, options.timeout)
+	result, err := explainFlow(ctx, runtime, options.configPath, options.domain, options.addresses, options.family, options.resolve, options.timeout)
 	if err != nil {
 		return err
 	}
@@ -170,8 +155,6 @@ func explainFlow(
 	configPath string,
 	domain string,
 	addresses []netip.Addr,
-	protocol string,
-	port uint16,
 	family string,
 	resolve bool,
 	resolveTimeout time.Duration,
@@ -180,14 +163,14 @@ func explainFlow(
 	if err != nil {
 		return explainResult{}, err
 	}
-	metadata := rules.FlowMetadata{Domain: domain, Protocol: protocol, DestinationPort: port}
+	metadata := rules.FlowMetadata{Domain: domain}
 	candidates, err := engine.Candidates(metadata)
 	if err != nil {
 		return explainResult{}, err
 	}
 	result := explainResult{
 		Config:     configPath,
-		Input:      explainInput{Domain: domain, Protocol: protocol, Port: port, Family: family},
+		Input:      explainInput{Domain: domain, Family: family},
 		Candidates: make([]explainRule, 0, len(candidates)),
 	}
 	for _, address := range addresses {
@@ -265,8 +248,7 @@ func summarizeRule(rule config.Rule, deferred bool) explainRule {
 	result := explainRule{
 		ID: rule.ID, Domains: append([]string(nil), rule.Domains...),
 		DomainSuffixes: append([]string(nil), rule.DomainSuffixes...),
-		Protocol:       rule.Protocol, DestinationPorts: append([]uint16(nil), rule.DestinationPorts...),
-		Outbound: rule.Outbound, DeferredUntilDNS: deferred,
+		Outbound:       rule.Outbound, DeferredUntilDNS: deferred,
 	}
 	for _, prefix := range rule.DestinationCIDRs {
 		result.DestinationCIDRs = append(result.DestinationCIDRs, prefix.String())
@@ -347,7 +329,7 @@ func resolveConfigured(ctx context.Context, runtime *config.Config, start, domai
 }
 
 func printExplainResult(result explainResult) {
-	fmt.Printf("flow domain=%q protocol=%s port=%d", result.Input.Domain, result.Input.Protocol, result.Input.Port)
+	fmt.Printf("flow domain=%q", result.Input.Domain)
 	if len(result.Input.IPs) != 0 {
 		fmt.Printf(" ips=%s", strings.Join(result.Input.IPs, ","))
 	}

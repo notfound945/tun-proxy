@@ -10,7 +10,10 @@ system:
   manage_dns: true
 
 capture:
-  # Keep disabled until the Phase 8.4 root route/capture acceptance run.
+  # false captures only Fake-IP-prefixed traffic. A pure ip_cidr rule cannot
+  # see ordinary real-IP or literal-IP traffic unless this is true. Rules that
+  # combine domain/domain_suffix with ip_cidr still work while false because
+  # the explicit domain predicate causes the flow to receive a Fake IP.
   default_route: false
 
 tun:
@@ -79,8 +82,10 @@ outbounds:
   reject:
     type: reject
 
-# Only explicit domain/domain_suffix rules receive Fake IPs. Ordinary domains
-# keep the real DHCP/static DNS answers from dns.default_outbound.
+# Rule match fields are domain, domain_suffix, and ip_cidr. Only explicit
+# domain/domain_suffix rules receive Fake IPs; ordinary domains keep the real
+# DHCP/static DNS answers from dns.default_outbound. Set capture.default_route
+# to true if a pure ip_cidr rule must cover ordinary real-IP/literal-IP flows.
 rules:
   - domain_suffix:
       - cursor.sh

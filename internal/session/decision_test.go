@@ -27,7 +27,7 @@ func TestDecideFlowReResolvesWhenCIDRChangesOutbound(t *testing.T) {
 		"candidate": {Name: "candidate", Resolver: candidateResolver, Dialer: &fakeDialer{}},
 		"special":   {Name: "special", Resolver: specialResolver, Dialer: specialDialer},
 	}
-	metadata := rules.FlowMetadata{Domain: "example.com", Protocol: "tcp", DestinationPort: 443}
+	metadata := rules.FlowMetadata{Domain: "example.com"}
 	decision, prepared, err := decideFlow(t.Context(), matcher, routes, metadata, "example.com", netip.Addr{}, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestDecideFlowReusesResolverFallbackSelectedByCIDR(t *testing.T) {
 	fallbacks := 0
 	decision, prepared, err := decideFlow(
 		t.Context(), matcher, routes,
-		rules.FlowMetadata{Domain: "example.com", Protocol: "tcp"},
+		rules.FlowMetadata{Domain: "example.com"},
 		"example.com", netip.Addr{}, false, func() { fallbacks++ },
 	)
 	if err != nil {
@@ -86,7 +86,7 @@ func TestDecideFlowMatchesLiteralWithoutResolution(t *testing.T) {
 		"special":   {Name: "special", Resolver: resolver, Dialer: dialer},
 	}
 	literal := netip.MustParseAddr("203.0.113.9")
-	metadata := rules.FlowMetadata{DestinationIP: literal, Protocol: "tcp", DestinationPort: 443}
+	metadata := rules.FlowMetadata{DestinationIP: literal}
 	decision, prepared, err := decideFlow(t.Context(), matcher, routes, metadata, "", literal, false, nil)
 	if err != nil || decision.Outbound != "special" || prepared != nil || resolver.calls != 0 {
 		t.Fatalf("decision=%+v prepared=%+v resolver calls=%d err=%v", decision, prepared, resolver.calls, err)
@@ -113,7 +113,7 @@ func TestUDPUsesReResolvedAddressesWithoutThirdLookup(t *testing.T) {
 		"candidate": {Name: "candidate", Resolver: candidateResolver, PacketDialer: &fakePacketDialer{}},
 		"special":   {Name: "special", Resolver: specialResolver, PacketDialer: dialer},
 	}
-	metadata := rules.FlowMetadata{Domain: "example.com", Protocol: "udp", DestinationPort: 53}
+	metadata := rules.FlowMetadata{Domain: "example.com"}
 	decision, prepared, err := decideFlow(t.Context(), matcher, routes, metadata, "example.com", netip.Addr{}, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestDecideFlowCanFreezeRejectDecision(t *testing.T) {
 	}
 	decision, prepared, err := decideFlow(
 		t.Context(), matcher, routes,
-		rules.FlowMetadata{Domain: "example.com", Protocol: "tcp"},
+		rules.FlowMetadata{Domain: "example.com"},
 		"example.com", netip.Addr{}, false, nil,
 	)
 	if err != nil || decision.Outbound != "reject" || prepared != nil {
@@ -173,7 +173,7 @@ func TestDecideFlowUsesDeferredDirectCandidateBeforeDefaultReject(t *testing.T) 
 	}
 	decision, prepared, err := decideFlow(
 		t.Context(), matcher, routes,
-		rules.FlowMetadata{Domain: "example.com", Protocol: "tcp"},
+		rules.FlowMetadata{Domain: "example.com"},
 		"example.com", netip.Addr{}, false, nil,
 	)
 	if err != nil || decision.Outbound != "special" || prepared == nil || prepared.Outbound != "special" || specialResolver.calls != 1 {
@@ -190,7 +190,7 @@ func TestDecideFlowResolvesThroughDefaultBeforeCIDRReject(t *testing.T) {
 	}
 	decision, prepared, err := decideFlow(
 		t.Context(), matcher, routes,
-		rules.FlowMetadata{Domain: "example.com", Protocol: "tcp"},
+		rules.FlowMetadata{Domain: "example.com"},
 		"example.com", netip.Addr{}, false, nil,
 	)
 	if err != nil || decision.Outbound != "reject" || prepared != nil || candidateResolver.calls != 1 {

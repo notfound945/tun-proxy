@@ -236,8 +236,8 @@ recorded or deleted; other gateway and DNS bypasses are persisted before
 mutation. Routed pre-existing host entries and cross-interface address
 ambiguity are rejected rather than assumed or overwritten.
 
-Captured literal TCP/UDP destinations skip DNS and can match protocol, port,
-or default rules; domain predicates do not match domainless flows. Outbound
+Captured literal TCP/UDP destinations skip DNS and can match CIDR or default
+rules; domain predicates do not match domainless flows. Outbound
 topology becomes reload-immutable while capture is active. Sleep or interface
 changes re-prove the bypass plan and trigger a controlled reverse rollback if
 the plan changed. Conditional cleanup verifies both interface and gateway.
@@ -273,8 +273,11 @@ by both `check` and `run` before mutation, then removed without residue. Phase
 
 ## Recorded 8.5 implementation
 
-Rules now accept canonical IPv4 and IPv6 `ip_cidr` predicates, including
-combinations with domain, suffix, protocol, and destination port constraints.
+Rules accept canonical IPv4 and IPv6 `ip_cidr` predicates, including
+combinations with domain and suffix constraints.
+Pure CIDR rules require `capture.default_route: true` to observe ordinary
+real-IP or literal-IP traffic. Combined domain/suffix plus CIDR rules do not:
+their explicit domain predicate causes Fake-IP capture before CIDR evaluation.
 Candidate matching defers CIDR evaluation, resolves through the candidate
 outbound's isolated resolver, and then repeats the ordered match against the
 real address set. Any answer may satisfy a CIDR, but YAML rule order remains

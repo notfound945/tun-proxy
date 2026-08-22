@@ -6,12 +6,11 @@
 
 ```go
 type FlowMetadata struct {
-    Domain         string
-    FakeIP         netip.Addr
-    SourceIP       netip.Addr
-    SourcePort     uint16
-    DestinationPort uint16
-    Protocol       string
+    Domain        string
+    FakeIP        netip.Addr
+    DestinationIP netip.Addr
+    SourceIP      netip.Addr
+    SourcePort    uint16
 }
 ```
 
@@ -19,7 +18,7 @@ type FlowMetadata struct {
 
 ## 2. MVP 规则
 
-支持 `domain`、`domain_suffix`、`protocol`、`dst_port` 和默认规则。
+支持 `domain`、`domain_suffix`、`ip_cidr` 和默认规则。
 
 - 按 YAML 顺序，首个匹配生效。
 - 一个新流只产生一个最终不可变决策；两阶段内部评估不允许会话中途改写。
@@ -30,14 +29,17 @@ type FlowMetadata struct {
 Phase 8.5 已实现真实 IP CIDR 规则，使用两阶段决策：
 
 ```text
-域名/协议/端口预匹配
+域名条件预匹配
 → 使用候选出口解析真实 IP
 → IP/CIDR 后匹配
 → 必要时切换出口并重新解析
 ```
 
-- `ip_cidr` 可与 domain、domain_suffix、protocol、dst_port 组合，字段间为 AND。
+- `ip_cidr` 可与 `domain`、`domain_suffix` 组合，不同字段之间为 AND。
 - 一个规则包含多个 CIDR 时为 OR；域名存在多个 A/AAAA 候选时，任一地址命中即匹配。
+- 纯 `ip_cidr` 规则要覆盖普通真实 IP 或 literal-IP 流量，必须启用
+  `capture.default_route: true`，否则这些流量不会进入 TUN。带显式 `domain` /
+  `domain_suffix` 条件的组合 CIDR 规则在 `false` 时仍可通过 Fake IP 路径生效。
 - 预匹配保留满足非 IP 条件的 CIDR 延迟候选，并以首个不含 CIDR 的规则作为通常的
   解析候选；若该候选为 reject，则借用前面的首个 direct 候选完成解析判断。
 - 后匹配仍严格按 YAML 顺序首个生效。若出口改变，使用新出口的独立 Resolver

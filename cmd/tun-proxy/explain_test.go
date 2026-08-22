@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/netip"
 	"testing"
 	"time"
@@ -9,12 +10,19 @@ import (
 	"github.com/hailinpan/tun-proxy/internal/config"
 )
 
+func TestExplainFlagsExcludeRemovedRuleDimensions(t *testing.T) {
+	flags := newExplainFlagSet(io.Discard, &explainOptions{})
+	if flags.Lookup("protocol") != nil || flags.Lookup("port") != nil {
+		t.Fatal("explain still exposes removed protocol/port flags")
+	}
+}
+
 func TestExplainFlowReportsConclusiveDomainRule(t *testing.T) {
 	runtime, err := config.LoadFile("../../configs/config.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := explainFlow(context.Background(), runtime, "config.yaml", "api.cursor.sh", nil, "tcp", 443, "ipv4", false, time.Second)
+	result, err := explainFlow(context.Background(), runtime, "config.yaml", "api.cursor.sh", nil, "ipv4", false, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,14 +46,14 @@ func TestExplainFlowResolvesDeferredCIDRWithProvidedIP(t *testing.T) {
 			{ID: 2, Outbound: "default"},
 		},
 	}
-	pending, err := explainFlow(context.Background(), runtime, "config.yaml", "example.com", nil, "tcp", 443, "ipv4", false, time.Second)
+	pending, err := explainFlow(context.Background(), runtime, "config.yaml", "example.com", nil, "ipv4", false, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !pending.PendingDNS || pending.FinalDecision != nil || len(pending.Candidates) != 2 {
 		t.Fatalf("pending explanation = %+v", pending)
 	}
-	resolved, err := explainFlow(context.Background(), runtime, "config.yaml", "example.com", []netip.Addr{netip.MustParseAddr("203.0.113.9")}, "tcp", 443, "ipv4", false, time.Second)
+	resolved, err := explainFlow(context.Background(), runtime, "config.yaml", "example.com", []netip.Addr{netip.MustParseAddr("203.0.113.9")}, "ipv4", false, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +67,7 @@ func TestExplainSuffixRespectsLabelBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := explainFlow(context.Background(), runtime, "config.yaml", "not-cursor.sh", nil, "tcp", 443, "ipv4", false, time.Second)
+	result, err := explainFlow(context.Background(), runtime, "config.yaml", "not-cursor.sh", nil, "ipv4", false, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

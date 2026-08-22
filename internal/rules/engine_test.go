@@ -9,9 +9,9 @@ import (
 
 func TestEngineFirstMatchingRuleWins(t *testing.T) {
 	engine, err := New([]config.Rule{
-		{ID: 1, Domains: []string{"api.example.com"}, Protocol: "tcp", DestinationPorts: []uint16{443}, Outbound: "wired"},
-		{ID: 2, DomainSuffixes: []string{"example.com"}, Protocol: "tcp", Outbound: "wifi"},
-		{ID: 3, Outbound: "reject"},
+		{ID: 1, Domains: []string{"api.example.com"}, DomainSuffixes: []string{"example.com"}, Outbound: "exact"},
+		{ID: 2, DomainSuffixes: []string{"example.com"}, Outbound: "suffix"},
+		{ID: 3, Outbound: "default"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,24 +23,24 @@ func TestEngineFirstMatchingRuleWins(t *testing.T) {
 		want     Decision
 	}{
 		{
-			name:     "exact combined match",
-			metadata: FlowMetadata{Domain: "API.Example.COM.", Protocol: "TCP", DestinationPort: 443},
-			want:     Decision{RuleID: 1, Outbound: "wired"},
+			name:     "exact domain and suffix both match",
+			metadata: FlowMetadata{Domain: "API.Example.COM."},
+			want:     Decision{RuleID: 1, Outbound: "exact"},
 		},
 		{
 			name:     "suffix includes subdomain",
-			metadata: FlowMetadata{Domain: "cdn.example.com", Protocol: "tcp", DestinationPort: 80},
-			want:     Decision{RuleID: 2, Outbound: "wifi"},
+			metadata: FlowMetadata{Domain: "cdn.example.com"},
+			want:     Decision{RuleID: 2, Outbound: "suffix"},
 		},
 		{
 			name:     "suffix respects label boundary",
-			metadata: FlowMetadata{Domain: "notexample.com", Protocol: "tcp", DestinationPort: 80},
-			want:     Decision{RuleID: 3, Outbound: "reject"},
+			metadata: FlowMetadata{Domain: "notexample.com"},
+			want:     Decision{RuleID: 3, Outbound: "default"},
 		},
 		{
-			name:     "all constraints must match",
-			metadata: FlowMetadata{Domain: "api.example.com", Protocol: "udp", DestinationPort: 443},
-			want:     Decision{RuleID: 3, Outbound: "reject"},
+			name:     "different fields are combined with AND",
+			metadata: FlowMetadata{Domain: "other.example.com"},
+			want:     Decision{RuleID: 2, Outbound: "suffix"},
 		},
 	}
 	for _, test := range tests {
@@ -56,15 +56,15 @@ func TestEngineFirstMatchingRuleWins(t *testing.T) {
 	}
 }
 
-func TestEngineCarriesNoNetworkTypes(t *testing.T) {
+func TestEngineIgnoresNonRuleFlowMetadata(t *testing.T) {
 	engine, err := New([]config.Rule{{ID: 1, Outbound: "direct"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	decision, err := engine.Match(FlowMetadata{
 		Domain: "example.com", FakeIP: netip.MustParseAddr("198.18.0.10"),
-		SourceIP: netip.MustParseAddr("10.0.0.2"), SourcePort: 1234,
-		DestinationPort: 443, Protocol: "tcp",
+		DestinationIP: netip.MustParseAddr("203.0.113.10"),
+		SourceIP:      netip.MustParseAddr("10.0.0.2"), SourcePort: 1234,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,19 +81,18 @@ func TestEngineRequiresDefaultRule(t *testing.T) {
 	}
 }
 
-func TestEngineRoutesLiteralWithoutMatchingDomainRules(t *testing.T) {
+func TestEngineRoutesLiteralThroughDefaultWithoutDomainOrCIDRMatch(t *testing.T) {
 	engine, err := New([]config.Rule{
 		{ID: 1, Domains: []string{"example.com"}, Outbound: "domain"},
-		{ID: 2, Protocol: "tcp", DestinationPorts: []uint16{443}, Outbound: "literal-https"},
+		{ID: 2, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}, Outbound: "cidr"},
 		{ID: 3, Outbound: "default"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := engine.Match(FlowMetadata{
-		DestinationIP: netip.MustParseAddr("203.0.113.9"), Protocol: "tcp", DestinationPort: 443,
-	})
-	if err != nil || decision.RuleID != 2 || decision.Outbound != "literal-https" {
+	metadata := FlowMetadata{DestinationIP: netip.MustParseAddr("203.0.113.9")}
+	decision, err := engine.MatchResolved(metadata, []netip.Addr{metadata.DestinationIP})
+	if err != nil || decision != (Decision{RuleID: 3, Outbound: "default"}) {
 		t.Fatalf("literal decision = %+v, %v", decision, err)
 	}
 }
@@ -107,7 +106,7 @@ func TestEngineDefersCIDRRulesUntilResolved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := FlowMetadata{Domain: "api.example.com", Protocol: "tcp", DestinationPort: 443}
+	metadata := FlowMetadata{Domain: "api.example.com"}
 	candidate, err := engine.Match(metadata)
 	if err != nil || candidate != (Decision{RuleID: 2, Outbound: "candidate"}) {
 		t.Fatalf("candidate = %+v, %v", candidate, err)
@@ -125,22 +124,21 @@ func TestEngineDefersCIDRRulesUntilResolved(t *testing.T) {
 	}
 }
 
-func TestEngineCIDRRulePreservesOrderAndAllConstraints(t *testing.T) {
+func TestEngineCIDRRulesPreserveOrderAndDomainConstraints(t *testing.T) {
 	engine, err := New([]config.Rule{
 		{ID: 1, Domains: []string{"other.example"}, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, Outbound: "wrong-domain"},
-		{ID: 2, Protocol: "udp", DestinationPorts: []uint16{53}, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, Outbound: "dns"},
+		{ID: 2, DomainSuffixes: []string{"example.com"}, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, Outbound: "domain-cidr"},
 		{ID: 3, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("2001:db8::/32")}, Outbound: "v6"},
 		{ID: 4, Outbound: "default"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := FlowMetadata{Domain: "example.com", Protocol: "udp", DestinationPort: 53}
-	decision, err := engine.MatchResolved(metadata, []netip.Addr{netip.MustParseAddr("203.0.113.53")})
-	if err != nil || decision != (Decision{RuleID: 2, Outbound: "dns"}) {
+	decision, err := engine.MatchResolved(FlowMetadata{Domain: "api.example.com"}, []netip.Addr{netip.MustParseAddr("203.0.113.53")})
+	if err != nil || decision != (Decision{RuleID: 2, Outbound: "domain-cidr"}) {
 		t.Fatalf("IPv4 decision = %+v, %v", decision, err)
 	}
-	decision, err = engine.MatchResolved(FlowMetadata{Protocol: "tcp"}, []netip.Addr{netip.MustParseAddr("2001:db8::10")})
+	decision, err = engine.MatchResolved(FlowMetadata{}, []netip.Addr{netip.MustParseAddr("2001:db8::10")})
 	if err != nil || decision != (Decision{RuleID: 3, Outbound: "v6"}) {
 		t.Fatalf("IPv6 decision = %+v, %v", decision, err)
 	}
@@ -148,12 +146,11 @@ func TestEngineCIDRRulePreservesOrderAndAllConstraints(t *testing.T) {
 
 func TestEngineRequiresFakeIPForDomainPredicates(t *testing.T) {
 	engine, err := New([]config.Rule{
-		{ID: 1, Domains: []string{"api.example.com"}, Protocol: "tcp", DestinationPorts: []uint16{443}, Outbound: "exact"},
-		{ID: 2, DomainSuffixes: []string{"video.example"}, Protocol: "udp", Outbound: "suffix"},
+		{ID: 1, Domains: []string{"api.example.com"}, Outbound: "exact"},
+		{ID: 2, DomainSuffixes: []string{"video.example"}, Outbound: "suffix"},
 		{ID: 3, Domains: []string{"both.example.com"}, DomainSuffixes: []string{"example.com"}, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, Outbound: "combined"},
-		{ID: 4, Protocol: "tcp", DestinationPorts: []uint16{22}, Outbound: "port-only"},
-		{ID: 5, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("2001:db8::/32")}, Outbound: "cidr-only"},
-		{ID: 6, Outbound: "default"},
+		{ID: 4, DestinationCIDRs: []netip.Prefix{netip.MustParsePrefix("2001:db8::/32")}, Outbound: "cidr-only"},
+		{ID: 5, Outbound: "default"},
 	})
 	if err != nil {
 		t.Fatal(err)
