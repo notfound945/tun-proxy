@@ -158,6 +158,10 @@ func TestServiceOperationsWithoutInstallationSuggestCompleteInstallCommand(t *te
 		"start":   func(manager *Manager) error { return manager.Start(context.Background()) },
 		"restart": func(manager *Manager) error { return manager.Restart(context.Background()) },
 		"reload":  func(manager *Manager) error { return manager.Reload(context.Background()) },
+		"sync-config": func(manager *Manager) error {
+			_, err := manager.SynchronizeConfig(context.Background(), []byte("config"))
+			return err
+		},
 		"upgrade": func(manager *Manager) error {
 			_, err := manager.Upgrade(context.Background(), "/unused/binary", "", nil)
 			return err
@@ -369,6 +373,113 @@ func TestBeginConfigUpdateRequiresInstalledService(t *testing.T) {
 	manager := testManager(layout, &fakeRunner{}, &state)
 	if _, err := manager.BeginConfigUpdate([]byte("new-config")); err == nil || !strings.Contains(err.Error(), "not completely installed") {
 		t.Fatalf("BeginConfigUpdate() error = %v", err)
+	}
+}
+
+func TestSynchronizeConfigLeavesStoppedServiceStopped(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "binary", "old-config")
+	state := RuntimeState{}
+	runner := &fakeRunner{loaded: true}
+	manager := testManager(layout, runner, &state)
+
+	result, err := manager.SynchronizeConfig(context.Background(), []byte("new-config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Restarted {
+		t.Fatal("stopped service was unexpectedly restarted")
+	}
+	assertFile(t, layout.Config, "new-config", 0o600)
+	assertNoResidueTree(t, layout.Config)
+	if runner.loaded {
+		t.Fatal("stopped service job remained loaded during configuration replacement")
+	}
+	if !containsCall(runner.calls, " disable system/"+layout.Label) || !containsCall(runner.calls, " bootout system/"+layout.Label) {
+		t.Fatalf("synchronize calls = %v, want disable and bootout", runner.calls)
+	}
+}
+
+func TestSynchronizeConfigRestartsRunningService(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "binary", "old-config")
+	state := RuntimeState{Running: true, PID: 42, Phase: "starting"}
+	runner := &fakeRunner{loaded: true}
+	runner.onSuccess = func(call string) {
+		if strings.Contains(call, " bootout ") {
+			state = RuntimeState{}
+		}
+		if strings.Contains(call, " kickstart ") {
+			state = RuntimeState{Running: true, PID: 99, Phase: "running"}
+		}
+	}
+	manager := testManager(layout, runner, &state)
+
+	result, err := manager.SynchronizeConfig(context.Background(), []byte("new-config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Restarted {
+		t.Fatal("running service synchronization did not report restart")
+	}
+	assertFile(t, layout.Config, "new-config", 0o600)
+	if !state.Running || state.Phase != "running" || state.PID != 99 {
+		t.Fatalf("synchronized service state = %+v, want ready replacement", state)
+	}
+	if countCalls(runner.calls, " bootout ") != 1 || countCalls(runner.calls, " kickstart ") != 1 {
+		t.Fatalf("synchronize calls = %v, want one stop and one start", runner.calls)
+	}
+}
+
+func TestSynchronizeConfigRollsBackFailedRunningRestart(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "binary", "old-config")
+	state := RuntimeState{Running: true, PID: 42, Phase: "running"}
+	runner := &fakeRunner{loaded: true}
+	runner.fail = func(call string) error {
+		if strings.Contains(call, " kickstart ") && readTestFile(t, layout.Config) == "new-config" {
+			return errors.New("new configuration cannot start")
+		}
+		return nil
+	}
+	runner.onSuccess = func(call string) {
+		if strings.Contains(call, " bootout ") {
+			state = RuntimeState{}
+		}
+		if strings.Contains(call, " kickstart ") {
+			state = RuntimeState{Running: true, PID: 77, Phase: "running"}
+		}
+	}
+	manager := testManager(layout, runner, &state)
+
+	result, err := manager.SynchronizeConfig(context.Background(), []byte("new-config"))
+	if err == nil || !strings.Contains(err.Error(), "new configuration cannot start") {
+		t.Fatalf("SynchronizeConfig() error = %v", err)
+	}
+	if result.Restarted {
+		t.Fatal("failed synchronization reported restart")
+	}
+	assertFile(t, layout.Config, "old-config", 0o600)
+	if !state.Running || state.Phase != "running" || state.PID != 77 {
+		t.Fatalf("previous service was not restored after rollback: state=%+v", state)
+	}
+	assertNoResidueTree(t, layout.Config)
+}
+
+func TestSynchronizeConfigRejectsEmptyContentsBeforeUnloading(t *testing.T) {
+	layout := testLayout(t)
+	createInstalledArtifacts(t, layout, "binary", "old-config")
+	state := RuntimeState{}
+	runner := &fakeRunner{loaded: true}
+	manager := testManager(layout, runner, &state)
+
+	_, err := manager.SynchronizeConfig(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "contents are empty") {
+		t.Fatalf("SynchronizeConfig() error = %v", err)
+	}
+	assertFile(t, layout.Config, "old-config", 0o600)
+	if containsCall(runner.calls, " bootout ") {
+		t.Fatalf("invalid configuration unloaded service: calls=%v", runner.calls)
 	}
 }
 

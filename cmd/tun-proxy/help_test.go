@@ -33,7 +33,7 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 	if usage := renderedUsage("service install"); !strings.Contains(usage, "-start-at-boot") {
 		t.Fatalf("service install help missing boot-start flag: %s", usage)
 	}
-	for _, topic := range []string{"service start", "service stop", "service reload", "service upgrade"} {
+	for _, topic := range []string{"service start", "service stop", "service sync-user-config", "service reload", "service upgrade"} {
 		if usage := renderedUsage(topic); !strings.Contains(usage, serviceLogsHintCommand) {
 			t.Fatalf("%s help missing logs hint: %s", topic, usage)
 		}
@@ -45,6 +45,7 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 		"diagnose",
 		"service stop",
 		"service restart",
+		"service sync-user-config",
 		"service reload",
 		"service logs",
 	} {
@@ -86,6 +87,12 @@ func TestHelpRejectsUnknownTopic(t *testing.T) {
 func TestServiceRestartHelpAlias(t *testing.T) {
 	if err := serviceCommand([]string{"restart", "-h"}); err != nil {
 		t.Fatalf("service restart -h error = %v", err)
+	}
+}
+
+func TestServiceSyncUserConfigHelpAlias(t *testing.T) {
+	if err := serviceCommand([]string{"sync-user-config", "-h"}); err != nil {
+		t.Fatalf("service sync-user-config -h error = %v", err)
 	}
 }
 

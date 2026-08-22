@@ -1,6 +1,6 @@
 # tun-proxy current status
 
-Last updated: 2026-08-20
+Last updated: 2026-08-22
 
 This document records the current implementation status, acceptance evidence,
 and remaining release work. Detailed procedures and chronological evidence live
@@ -59,7 +59,10 @@ failure counter.
 Phase 9 adds the CLI operations and diagnostics documented in
 [`../phases/phase9-cli-operations.md`](../phases/phase9-cli-operations.md).
 The CLI is the only planned configuration, diagnostics, and service-management
-interface; no graphical management interface is planned.
+interface; no graphical management interface is planned. Managed configuration
+synchronization is separate from hot reload: `service sync-user-config` keeps a
+stopped service stopped or restarts a running service with rollback, while
+`service reload` remains available only to a running service.
 
 The one-off Phase 0, 2, 3, 8.6, and 8.7b spike commands were removed after
 production implementation and acceptance. Their historical evidence remains
@@ -71,5 +74,5 @@ under `docs/phases/`, and `cmd/tun-proxy` is now the only command entry point.
 - Complete pending TCP MVP plain HTTP and two-interface packet-capture evidence.
 - Run QUIC acceptance with an HTTP/3-capable client.
 - Run native IPv6 forwarding acceptance on an IPv6-capable physical network.
-- Run the remaining root Phase 9 restart, reload, and logs acceptance during a
+- Run the remaining root Phase 9 restart, configuration-sync, reload, and logs acceptance during a
   maintenance window that does not disrupt the active service.

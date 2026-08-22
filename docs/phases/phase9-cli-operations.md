@@ -15,6 +15,7 @@ tun-proxy help explain
 tun-proxy help diagnose
 tun-proxy help config validate
 tun-proxy help service
+tun-proxy help service sync-user-config
 tun-proxy help service reload
 tun-proxy help service logs
 ```
@@ -121,6 +122,7 @@ running.
 ```sh
 sudo tun-proxy service stop
 sudo tun-proxy service restart
+sudo tun-proxy service sync-user-config
 sudo tun-proxy service reload -timeout 15s
 sudo tun-proxy service logs -lines 200
 sudo tun-proxy service logs -stream stderr -follow
@@ -131,9 +133,14 @@ waits for the process/runtime state to be removed. Installed artifacts remain
 available for a later explicit start, which re-enables and bootstraps the job.
 This unload step prevents a `KeepAlive` policy from respawning a manually
 stopped service. Restart performs that clean stop followed by the existing
-readiness-checked start. Reload signals the launchd job with `SIGHUP`, then waits for the worker
-status socket to increment either the success or failure counter; immutable
-changes return the runtime rejection without replacing the active generation.
+readiness-checked start. `sync-user-config` validates the invoking user's
+default configuration and atomically installs it. A stopped service remains
+stopped; a running service is stopped and restarted with readiness checking,
+and startup failure rolls the configuration back before attempting to restore
+the previous service. Reload is reserved for a running service: it signals the
+launchd job with `SIGHUP`, then waits for the worker status socket to increment
+either the success or failure counter; immutable changes return the runtime
+rejection without replacing the active generation.
 
 Logs are limited to the fixed managed stdout/stderr paths. The reader rejects
 symlinks and non-regular files, bounds the tail window to 8 MiB, limits the
@@ -145,8 +152,9 @@ following.
 As of 2026-08-22, command routing, help topics, configuration validation,
 domain-suffix boundaries, offline/pending and resolved explain decisions,
 partial diagnosis, service manager restart/reload signaling, reload success and
-failure confirmation, cleanup recovery safety, log tail edge cases, and symlink
-rejection are covered by automated tests.
+failure confirmation, stopped/running configuration synchronization and restart
+rollback, cleanup recovery safety, log tail edge cases, and symlink rejection
+are covered by automated tests.
 
 The remaining root acceptance is intentionally deferred to a maintenance
 window so the currently running managed service is not disturbed:
@@ -157,7 +165,9 @@ window so the currently running managed service is not disturbed:
    the success counter without replacing the worker PID;
 4. inject an immutable change and confirm reload rejection preserves the active
    configuration;
-5. run `service restart` and verify clean PID replacement, readiness, Fake DNS,
+5. run `service sync-user-config` while stopped and running, verifying the
+   stopped-state preservation and readiness-checked PID replacement;
+6. run `service restart` and verify clean PID replacement, readiness, Fake DNS,
    forwarding, and restored runtime metrics.
 
 The strict 24-hour soak remains pending and is not part of this CLI slice.

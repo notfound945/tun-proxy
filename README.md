@@ -146,6 +146,7 @@ tun-proxy config -finder
 sudo tun-proxy service stop
 sudo tun-proxy service start
 sudo tun-proxy service restart
+sudo tun-proxy service sync-user-config
 sudo tun-proxy service reload
 sudo tun-proxy service logs -follow
 ```
@@ -314,24 +315,33 @@ sudo tun-proxy service install
 ```
 
 服务安装后，CLI 用户配置和 LaunchDaemon 托管配置是两份独立文件。再次修改
-`~/.config/tun-proxy/config.yaml` 后，使用下面的命令完成再次校验、事务同步和热重载：
+`~/.config/tun-proxy/config.yaml` 后，可以同步完整配置：
+
+```sh
+sudo tun-proxy service sync-user-config
+```
+
+该命令会根据 `SUDO_USER` 自动选择调用 `sudo` 的用户配置，无需填写完整路径。服务未运行时，
+校验通过后会原子替换托管配置并保持停止；服务正在运行时，会停止服务、替换配置并重新启动，
+等待服务就绪。新配置启动失败时会回滚托管配置，并尝试恢复原服务。
+
+只修改可热重载字段、且服务正在运行时，可以避免重启：
 
 ```sh
 sudo tun-proxy service reload -user-config
 ```
 
-`-user-config` 会根据 `SUDO_USER` 自动选择调用 `sudo` 的用户配置，无需填写完整路径。
-需要应用其他配置文件时使用：
+需要热重载其他配置文件时使用：
 
 ```sh
 sudo tun-proxy service reload \
   -config "/path/to/config.yaml"
 ```
 
-同步目标固定为 `/Library/Application Support/tun-proxy/config.yaml`。不可热重载的修改会
-在同步前被拒绝；运行时拒绝、超时或配置摘要不一致时，会回滚托管配置并恢复原有运行
-配置。不带 `-config` 或 `-user-config` 的 `service reload` 只重读现有托管配置，不会自动
-复制用户配置。
+同步目标固定为 `/Library/Application Support/tun-proxy/config.yaml`。`service reload` 始终
+只适用于正在运行的服务，并且会拒绝不可热重载的修改；运行时拒绝、超时或配置摘要不一致时，
+会回滚托管配置并恢复原有运行配置。启动失败后需要修正错误网口等完整配置时，应使用
+`service sync-user-config`，然后在服务仍停止时执行 `sudo tun-proxy service start`。
 
 ## 文档
 

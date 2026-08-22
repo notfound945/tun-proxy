@@ -45,6 +45,17 @@ func TestValidateServiceReloadStatusAcceptsRunningService(t *testing.T) {
 	}
 }
 
+func TestValidateServiceReloadStatusRejectsRunningServiceBeforeReady(t *testing.T) {
+	err := validateServiceReloadStatus(launchservice.Status{
+		Installed: true,
+		Loaded:    true,
+		Runtime:   launchservice.RuntimeState{Running: true, PID: 42, Phase: "starting"},
+	})
+	if err == nil || !strings.Contains(err.Error(), launchservice.StartCommand) {
+		t.Fatalf("validateServiceReloadStatus() error = %v, want not-running guidance", err)
+	}
+}
+
 func TestWaitForServiceReloadObservesSuccess(t *testing.T) {
 	before := runtimestatus.Snapshot{Reload: runtimestatus.ReloadStats{Successes: 2}}
 	after, err := waitForServiceReloadWithQuery(t.Context(), "status.sock", before, time.Second,

@@ -30,10 +30,11 @@ configs/example.yaml
 /Library/Application Support/tun-proxy/config.yaml
 ```
 
-用户配置与托管配置是两份独立文件。修改用户配置后，可使用以下命令校验、同步并热重载：
+用户配置与托管配置是两份独立文件。修改用户配置后，可使用以下命令校验并同步；服务原来正在
+运行时会重启，原来停止时会保持停止：
 
 ```sh
-sudo tun-proxy service reload -user-config
+sudo tun-proxy service sync-user-config
 ```
 
 也可以让大多数命令读取指定文件：
@@ -771,6 +772,10 @@ tun-proxy explain \
 
 ## 16. 热重载矩阵
 
+以下矩阵适用于服务正在运行、使用 `service reload` 原地热更新的情况。需要应用不在矩阵中的
+完整用户配置时，应使用 `service sync-user-config`；它会在服务运行时执行重启，在服务停止时
+只同步托管配置。
+
 执行：
 
 ```sh
@@ -811,14 +816,29 @@ sudo tun-proxy service reload -user-config
 - `sessions.max_udp_sessions_per_source`
 - 当前 `capture.default_route: true` 时的全部 `outbounds`
 
-不可热重载的字段需要停止并重新启动前台实例。托管服务需要同步新配置并重启时，可以使用事务升级命令：
+不可热重载的字段需要停止并重新启动前台实例。托管服务可以直接同步用户配置；如果服务正在
+运行，该命令会自动停止并重启：
+
+```sh
+sudo tun-proxy service sync-user-config
+```
+
+如果服务已经因错误配置启动失败，该命令会替换托管配置并保持停止，随后执行：
+
+```sh
+sudo tun-proxy service start
+```
+
+也可以使用事务升级命令同时更新二进制或显式路径配置：
 
 ```sh
 sudo tun-proxy service upgrade \
   -config ~/.config/tun-proxy/config.yaml
 ```
 
-`service reload` 会在提交托管配置前拒绝不可热重载的变化，不会把无法应用的新配置留在托管路径。
+`service reload` 始终要求服务正在运行，并会在提交托管配置前拒绝不可热重载的变化，不会把
+无法应用的新配置留在托管路径。`service sync-user-config` 不受热重载矩阵限制，因为运行中会
+完整重启；启动失败时会回滚托管配置并尝试恢复旧服务。
 
 ## 17. 常见配置错误
 
@@ -864,7 +884,10 @@ sudo tun-proxy check
 tun-proxy config validate
 ```
 
-如果 YAML 有效但 reload 报某字段 `cannot be reloaded`，说明修改涉及主机网络、监听器、地址池或固定容量。可使用 `service upgrade -config ...` 事务性同步配置；升级前服务已就绪时会重启并验证新配置，原本未运行或未就绪时则保持 stopped/unloaded，需要随后显式执行 `service start`。不要继续尝试热重载不可热重载的字段。
+如果 YAML 有效但运行中的服务报某字段 `cannot be reloaded`，说明修改涉及主机网络、监听器、
+地址池或固定容量。使用 `service sync-user-config` 同步并重启；也可以使用
+`service upgrade -config ...` 事务性同步显式路径配置。不要对运行中的服务继续尝试热重载
+不可热重载的字段。
 
 ### `config validate` 成功但 `check` 失败
 

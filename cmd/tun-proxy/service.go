@@ -50,6 +50,8 @@ func serviceCommand(args []string) error {
 		}
 		fmt.Println("tun-proxy service restarted")
 		return nil
+	case "sync-user-config":
+		return serviceSyncUserConfigCommand(ctx, manager, args[1:])
 	case "reload":
 		return serviceReloadCommand(ctx, manager, args[1:])
 	case "status":
@@ -105,6 +107,35 @@ func serviceStopCommand(ctx context.Context, stopper serviceStopper, args []stri
 		return withServiceLogsHint(err)
 	}
 	fmt.Println("tun-proxy service stopped and unloaded")
+	return nil
+}
+
+type serviceConfigSynchronizer interface {
+	SynchronizeConfig(context.Context, []byte) (launchservice.ConfigSyncResult, error)
+}
+
+func serviceSyncUserConfigCommand(ctx context.Context, synchronizer serviceConfigSynchronizer, args []string) error {
+	if hasOnlyHelpArgument(args) {
+		return helpCommand([]string{"service", "sync-user-config"})
+	}
+	if len(args) != 0 {
+		return errors.New("service sync-user-config does not accept arguments")
+	}
+	source := defaultUserConfigPath()
+	source, contents, _, _, err := loadValidatedConfigSource(source)
+	if err != nil {
+		return fmt.Errorf("validate user configuration before synchronization: %w", err)
+	}
+	result, err := synchronizer.SynchronizeConfig(ctx, contents)
+	if err != nil {
+		return withServiceLogsHint(fmt.Errorf("synchronize user configuration: %w", err))
+	}
+	fmt.Printf("user configuration synchronized: %s\n", source)
+	if result.Restarted {
+		fmt.Println("tun-proxy service restarted with the synchronized configuration")
+	} else {
+		fmt.Printf("tun-proxy service remains stopped; run %q to start it\n", launchservice.StartCommand)
+	}
 	return nil
 }
 
@@ -266,10 +297,10 @@ func validateServiceReloadStatus(status launchservice.Status) error {
 	if !status.Installed {
 		return fmt.Errorf("tun-proxy service is not installed; run %q first", launchservice.InstallCommand)
 	}
-	if !status.Runtime.Running || status.Runtime.Phase != "running" {
-		return serviceReloadNotRunningError(status.Runtime.Phase)
+	if status.Runtime.Running && status.Runtime.Phase == "running" {
+		return nil
 	}
-	return nil
+	return serviceReloadNotRunningError(status.Runtime.Phase)
 }
 
 func serviceReloadNotRunningError(phase string) error {

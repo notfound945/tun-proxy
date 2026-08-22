@@ -108,6 +108,12 @@ type UpgradeResult struct {
 	Restarted bool
 }
 
+// ConfigSyncResult describes whether synchronizing the managed configuration
+// restarted and readiness-checked a service that was running beforehand.
+type ConfigSyncResult struct {
+	Restarted bool
+}
+
 // ConfigUpdate is an activated managed-configuration replacement that must be
 // committed after runtime acknowledgement or rolled back after rejection.
 type ConfigUpdate struct {
@@ -438,6 +444,79 @@ func (manager *Manager) BeginConfigUpdate(contents []byte) (*ConfigUpdate, error
 		return nil, err
 	}
 	return &ConfigUpdate{replacement: replaced}, nil
+}
+
+// SynchronizeConfig atomically replaces the managed configuration. A stopped
+// service remains stopped. A running service is stopped before activation and
+// restarted with readiness checking; startup failure rolls the configuration
+// back and attempts to restore the previous running service.
+func (manager *Manager) SynchronizeConfig(ctx context.Context, contents []byte) (result ConfigSyncResult, resultErr error) {
+	if err := manager.validate(); err != nil {
+		return result, err
+	}
+	if err := manager.requireRoot(); err != nil {
+		return result, err
+	}
+	installed, err := manager.installed()
+	if err != nil {
+		return result, err
+	}
+	if !installed {
+		return result, serviceNotInstalledError()
+	}
+	if len(contents) == 0 {
+		return result, errors.New("managed configuration contents are empty")
+	}
+	if len(contents) > privsep.MaxConfigSize {
+		return result, fmt.Errorf("managed configuration exceeds %d bytes", privsep.MaxConfigSize)
+	}
+	before, err := manager.Probe()
+	if err != nil {
+		return result, err
+	}
+	stage, err := stageContents(contents, manager.Layout.Config, 0o600)
+	if err != nil {
+		return result, err
+	}
+	defer os.Remove(stage) //nolint:errcheck // Best-effort staging cleanup after activation.
+
+	if err := manager.Stop(ctx); err != nil {
+		return result, fmt.Errorf("stop service before configuration synchronization: %w", err)
+	}
+	replaced, err := activateStage(stage, manager.Layout.Config, false)
+	if err != nil {
+		if before.Running {
+			err = errors.Join(err, manager.restartService())
+		}
+		return result, fmt.Errorf("activate synchronized configuration: %w", err)
+	}
+
+	if before.Running {
+		if err := manager.Start(ctx); err != nil {
+			failures := []error{fmt.Errorf("start service with synchronized configuration: %w", err)}
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), manager.StartTimeout+manager.StopTimeout+25*time.Second)
+			defer cancel()
+			stopErr := manager.Stop(rollbackCtx)
+			if stopErr != nil {
+				failures = append(failures, fmt.Errorf("stop failed synchronized service before rollback: %w", stopErr))
+			}
+			rollbackErr := replaced.rollback()
+			if rollbackErr != nil {
+				failures = append(failures, fmt.Errorf("roll back managed configuration: %w", rollbackErr))
+			}
+			if stopErr == nil && rollbackErr == nil {
+				if restoreErr := manager.Start(rollbackCtx); restoreErr != nil {
+					failures = append(failures, fmt.Errorf("restore previous service after configuration rollback: %w", restoreErr))
+				}
+			}
+			return result, errors.Join(failures...)
+		}
+		result.Restarted = true
+	}
+	if err := replaced.commit(); err != nil {
+		return result, fmt.Errorf("managed configuration activated but commit cleanup failed: %w", err)
+	}
+	return result, nil
 }
 
 // Reload asks the running supervisor to re-read and atomically apply its

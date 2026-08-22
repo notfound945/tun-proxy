@@ -139,15 +139,16 @@ configured IPv4/IPv6 snapshots and WALs.
 	"service": `usage: tun-proxy service <command> [options]
 
 commands:
-  install [options]    install the managed LaunchDaemon
-  start                start the installed service
-  stop                 stop the service cleanly
-  restart              stop and start the service
-  reload [options]     atomically reload mutable configuration
-  status [-json]       show launchd and runtime status
-  logs [options]       read or follow managed stdout/stderr logs
-  upgrade [options]    transactionally replace binary/configuration
-  uninstall [options]  remove the service
+  install [options]     install the managed LaunchDaemon
+  start                 start the installed service
+  stop                  stop the service cleanly
+  restart               stop and start the service
+  sync-user-config      install user config; restart only if already running
+  reload [options]      atomically reload mutable configuration
+  status [-json]        show launchd and runtime status
+  logs [options]        read or follow managed stdout/stderr logs
+  upgrade [options]     transactionally replace binary/configuration
+  uninstall [options]   remove the service
 
 Run "tun-proxy help service <command>" for details.
 `,
@@ -168,15 +169,27 @@ its job so KeepAlive cannot start it again. The installed files are preserved;
 "sudo tun-proxy service logs" to inspect managed stdout/stderr.
 `,
 	"service restart": "usage: tun-proxy service restart\n",
+	"service sync-user-config": `usage: tun-proxy service sync-user-config
+
+Validates the invoking user's ~/.config/tun-proxy/config.yaml and atomically
+copies it to the managed service configuration. If the service is running, it
+is restarted and checked for readiness; startup failure rolls the managed
+configuration back and attempts to restore the previous service. If the
+service is stopped, it remains stopped. On failure, inspect managed logs with:
+  sudo tun-proxy service logs
+`,
 	"service reload": `usage: tun-proxy service reload [options]
 
 {{generated-options}}
 
-Without -config or -user-config, the installed configuration is re-read.
--user-config selects the invoking user's ~/.config/tun-proxy/config.yaml; -config
-selects an explicit path. The source is validated and transactionally applied,
-with rollback when runtime acknowledgement fails. On failure, run
-"sudo tun-proxy service logs" to inspect managed stdout/stderr.
+Without -config or -user-config, the running service re-reads the installed
+configuration. -user-config selects the invoking user's
+~/.config/tun-proxy/config.yaml; -config selects an explicit path. For a running
+service, the source is transactionally applied with rollback when runtime
+acknowledgement fails. Reload requires a running service; use
+"sudo tun-proxy service sync-user-config" to synchronize the user configuration
+while preserving stopped/running state. On failure, inspect managed logs with:
+  sudo tun-proxy service logs
 `,
 	"service status": `usage: tun-proxy service status [options]
 
