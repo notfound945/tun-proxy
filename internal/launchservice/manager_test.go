@@ -53,11 +53,13 @@ func (accounts *fakeAccounts) Restore(_ context.Context, identity privsep.Identi
 }
 
 type fakeRunner struct {
-	loaded    bool
-	disabled  bool
-	calls     []string
-	fail      func(string) error
-	onSuccess func(string)
+	loaded                 bool
+	disabled               bool
+	bootoutPending         bool
+	bootoutPrintsRemaining int
+	calls                  []string
+	fail                   func(string) error
+	onSuccess              func(string)
 }
 
 func (runner *fakeRunner) Run(_ context.Context, executable string, args ...string) ([]byte, error) {
@@ -71,13 +73,25 @@ func (runner *fakeRunner) Run(_ context.Context, executable string, args ...stri
 	if len(args) > 0 {
 		switch args[0] {
 		case "print":
+			if runner.bootoutPending {
+				if runner.bootoutPrintsRemaining == 0 {
+					runner.loaded = false
+					runner.bootoutPending = false
+				} else {
+					runner.bootoutPrintsRemaining--
+				}
+			}
 			if !runner.loaded {
 				return nil, errJobNotLoaded
 			}
 		case "bootstrap":
 			runner.loaded = true
 		case "bootout":
-			runner.loaded = false
+			if runner.bootoutPrintsRemaining > 0 {
+				runner.bootoutPending = true
+			} else {
+				runner.loaded = false
+			}
 		case "disable":
 			runner.disabled = true
 		case "enable":
@@ -609,6 +623,63 @@ func TestStopUnloadsLoadedJobWithoutRuntimeState(t *testing.T) {
 	}
 	if countCalls(runner.calls, " bootout ") != 1 {
 		t.Fatalf("loaded service without runtime state was not unloaded exactly once: %v", runner.calls)
+	}
+}
+
+func TestStopWaitsForLaunchdToPublishJobRemoval(t *testing.T) {
+	layout := testLayout(t)
+	state := RuntimeState{}
+	runner := &fakeRunner{loaded: true, bootoutPrintsRemaining: 2}
+	manager := testManager(layout, runner, &state)
+
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runner.loaded || runner.bootoutPending {
+		t.Fatalf("stop left delayed launchd removal pending: %+v", runner)
+	}
+	if countCalls(runner.calls, " print ") != 4 {
+		t.Fatalf("launchd print calls = %v, want initial check plus three removal checks", runner.calls)
+	}
+	if countCalls(runner.calls, " bootout ") != 1 {
+		t.Fatalf("stop retried bootout instead of waiting: %v", runner.calls)
+	}
+}
+
+func TestStopTimesOutWhenLaunchdJobRemainsLoaded(t *testing.T) {
+	layout := testLayout(t)
+	state := RuntimeState{}
+	runner := &fakeRunner{loaded: true, bootoutPrintsRemaining: 1 << 20}
+	manager := testManager(layout, runner, &state)
+	manager.StopTimeout = 10 * time.Millisecond
+
+	err := manager.Stop(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "launchd job remained loaded for 10ms after service stop") {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if countCalls(runner.calls, " bootout ") != 1 {
+		t.Fatalf("stop retried bootout while waiting for removal: %v", runner.calls)
+	}
+}
+
+func TestStopReturnsLaunchdInspectionErrorWhileWaitingForRemoval(t *testing.T) {
+	layout := testLayout(t)
+	state := RuntimeState{}
+	printCalls := 0
+	runner := &fakeRunner{loaded: true, fail: func(call string) error {
+		if strings.Contains(call, " print ") {
+			printCalls++
+			if printCalls == 2 {
+				return errors.New("print failed")
+			}
+		}
+		return nil
+	}}
+	manager := testManager(layout, runner, &state)
+
+	err := manager.Stop(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "inspect launchd service: print failed") {
+		t.Fatalf("Stop() error = %v", err)
 	}
 }
 

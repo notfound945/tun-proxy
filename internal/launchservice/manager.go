@@ -365,12 +365,11 @@ func (manager *Manager) Stop(ctx context.Context) error {
 		if _, err := manager.Runner.Run(ctx, launchctlPath, "bootout", "system/"+manager.Layout.Label); err != nil {
 			return fmt.Errorf("unload service while stopping: %w", err)
 		}
-		stillLoaded, err := manager.loaded(ctx)
-		if err != nil {
+		// launchctl bootout may return before launchd has published the job's
+		// removal. Treat the state transition as asynchronous and wait for print
+		// to report the label missing instead of failing on the first stale read.
+		if err := manager.waitUnloaded(ctx, manager.StopTimeout); err != nil {
 			return err
-		}
-		if stillLoaded {
-			return errors.New("launchd job remains loaded after service stop")
 		}
 	}
 	if state.Running {
@@ -809,6 +808,29 @@ func (manager *Manager) loaded(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("inspect launchd service: %w", err)
+}
+
+func (manager *Manager) waitUnloaded(ctx context.Context, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(manager.PollInterval)
+	defer ticker.Stop()
+	for {
+		loaded, err := manager.loaded(ctx)
+		if err != nil {
+			return err
+		}
+		if !loaded {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("launchd job remained loaded for %s after service stop", timeout)
+		case <-ticker.C:
+		}
+	}
 }
 
 func (manager *Manager) installed() (bool, error) {
