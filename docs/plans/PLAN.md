@@ -2,7 +2,7 @@
 
 ## 项目目标
 
-`tun-proxy` 是一个仅面向 macOS、自行编译和使用的纯 Go TUN 代理。程序通过原生 `utun` 接管 Fake IP 网段流量，使用 Fake DNS 保留域名，再根据 YAML 规则为每个新 TCP/UDP 流选择指定的物理网卡出口。
+`tun-proxy` 是一个仅面向 macOS 的纯 Go TUN 多出口分流工具。程序通过原生 `utun` 接管选择性的 Fake IP 前缀，或在显式启用时接管 split-default 流量；它使用 Fake DNS 保留域名，并根据 YAML 中的域名/CIDR 规则为每个新 TCP/UDP 流选择指定物理网卡、fallback 或 reject。托管模式由 root supervisor 持有特权资源，数据面运行在 `_tun-proxy` 非 root worker 中。
 
 ## 文档索引
 
@@ -25,10 +25,10 @@
 以下规则对所有模块和实施阶段生效：
 
 1. 平台仅支持 macOS，业务代码全部使用 Go，不使用 Xcode、Swift 或 NetworkExtension。
-2. 程序以 CLI 形式运行，通过 `sudo` 获取创建 `utun`、修改路由、绑定 53 端口和修改系统 DNS 所需权限。
+2. 程序只提供 CLI。前台 `run` 通过 `sudo` 运行；托管模式由 root supervisor 创建 `utun`、修改路由/DNS并绑定 53 端口，再把已打开描述符交给 `_tun-proxy` 非 root worker 运行数据面。
 3. 配置使用 YAML，并启用严格字段校验；配置错误时不得修改任何系统状态。
 4. 使用成熟的用户态 TCP/IP 栈，不自行实现 TCP。
-5. MVP 只接管 Fake IP 网段，不修改默认路由；直接 IP 流量在 MVP 中不透明接管。
+5. `capture.default_route: false` 时只接管 Fake IPv4/IPv6 前缀；显式启用后使用 IPv4/IPv6 split-default 路由捕获普通真实 IP 和 literal-IP 流量，并为出口 DNS 和网关安装可验证的旁路。
 6. 每个新流只匹配一次规则，出口一旦选定便固定到该流结束，既有 TCP 连接不跨网卡迁移。
 7. 域名的真实 DNS 查询与其业务连接必须使用同一个出口网卡。
 8. 所有系统修改都必须可追踪、可逆；必须提供事务回滚和独立的 `cleanup` 命令。
@@ -37,7 +37,7 @@
 11. 接口名称不得硬编码为 Wi-Fi 或有线类型，由用户通过 `interfaces` 命令确认并写入 YAML。
 12. 所有缓存、会话表和地址池必须有容量、超时和可观测指标。
 13. 第三方依赖必须检查许可证并固定版本；gVisor 必须通过内部适配层隔离 API 变化。
-14. Phase 0 可行性验证未通过前，不进入 TUN、Fake IP 和 netstack 主体开发。
+14. Phase 0–9 的设计结论和验收状态记录在阶段文档；当前能力判断以源码和 `STATUS.md` 为准，早期阶段边界不得覆盖后续已交付能力。
 
 ## 跨模块不变量
 
@@ -48,6 +48,8 @@
 - 新配置只影响新流，现有流继续使用创建时的出口决策。
 - 任一步启动失败都必须按已完成步骤的反向顺序回滚。
 - 程序正常退出或执行 `cleanup` 后，系统 DNS、路由和接口状态必须恢复到启动前状态。
+- 托管模式中只有 root supervisor 可以修改宿主网络；worker 从首条业务指令开始必须保持非 root 且只访问固定的 worker/runtime/data 路径。
+- default-route 捕获的旁路拓扑无法被证明安全或运行中发生不兼容变化时，必须拒绝启动或安全停止，不得静默改走错误出口。
 
 ## 文档维护约定
 

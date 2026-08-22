@@ -1,5 +1,8 @@
 # 规则引擎、多网卡出口与独立 DNS
 
+> 本文描述当前 Phase 8.5 之后的规则语义。早期 `protocol` / `dst_port` 规则已经删除；
+> 当前只支持域名、域名后缀、目标 CIDR 和最终默认规则。
+
 ## 1. Flow Metadata
 
 规则引擎接收纯数据，不执行网络 I/O：
@@ -14,100 +17,118 @@ type FlowMetadata struct {
 }
 ```
 
-字段可在实现时调整，但规则层不得依赖 gVisor 类型。
+- Fake-IP 流量同时保留 `Domain` 与 Fake 地址。
+- default-route 捕获的 literal-IP 流量没有域名，直接以真实目标地址完成 CIDR 匹配。
+- 规则层不依赖 gVisor、resolver 或 Socket 类型。
 
-## 2. MVP 规则
+## 2. 当前规则
 
-支持 `domain`、`domain_suffix`、`ip_cidr` 和默认规则。
+支持 `domain`、`domain_suffix`、`ip_cidr` 和默认规则：
 
 - 按 YAML 顺序，首个匹配生效。
-- 一个新流只产生一个最终不可变决策；两阶段内部评估不允许会话中途改写。
-- 默认规则必须位于最后。
-- 热更新只影响新流。
-- 结果包含 Outbound 名称和匹配规则标识。
+- 最后一条必须是只包含 `outbound` 的无条件默认规则。
+- `domain` 精确匹配规范化域名。
+- `domain_suffix` 按 DNS label 边界匹配自身及子域名，不匹配字符串伪后缀。
+- 同一规则内多个 domain/suffix/CIDR 分别为 OR；不同字段之间为 AND。
+- 一个 CIDR 规则在任一解析地址命中任一前缀时成立。
+- IPv4-mapped IPv6、带 host bits 的非规范 CIDR 和重复/未知字段在配置阶段拒绝或规范化处理。
+- `protocol` 和 `dst_port` 不受支持，严格 YAML 会拒绝旧字段。
+- 一个新流只产生一个最终不可变决定；reload 只影响新流。
 
-Phase 8.5 已实现真实 IP CIDR 规则，使用两阶段决策：
+## 3. 选择性 Fake IP 与 CIDR 两阶段决策
+
+Fake DNS 只依据显式 `domain` / `domain_suffix` 条件决定是否分配 Fake IP，因为 DNS 阶段
+尚无真实地址：
+
+- 纯 `ip_cidr` 规则要覆盖普通真实 IP 或 literal-IP 流量，必须启用
+  `capture.default_route: true`。
+- 域名 + CIDR 组合规则在选择性模式下仍可生效：域名条件先触发 Fake IP，数据面再解析真实地址。
+
+域名流使用两阶段决策：
 
 ```text
-域名条件预匹配
-→ 使用候选出口解析真实 IP
-→ IP/CIDR 后匹配
-→ 必要时切换出口并重新解析
+按顺序收集满足非 IP 条件的 CIDR 延迟候选
+→ 找到首个不含 CIDR 的结论规则
+→ 通过可解析候选出口查询真实 A/AAAA
+→ 按完整 YAML 顺序执行 CIDR 后匹配
+→ 若最终策略出口改变，使用最终出口独立 Resolver 再解析一次
+→ 冻结 RuleID 和策略 Outbound，不再重新匹配
 ```
 
-- `ip_cidr` 可与 `domain`、`domain_suffix` 组合，不同字段之间为 AND。
-- 一个规则包含多个 CIDR 时为 OR；域名存在多个 A/AAAA 候选时，任一地址命中即匹配。
-- 纯 `ip_cidr` 规则要覆盖普通真实 IP 或 literal-IP 流量，必须启用
-  `capture.default_route: true`，否则这些流量不会进入 TUN。带显式 `domain` /
-  `domain_suffix` 条件的组合 CIDR 规则在 `false` 时仍可通过 Fake IP 路径生效。
-- 预匹配保留满足非 IP 条件的 CIDR 延迟候选，并以首个不含 CIDR 的规则作为通常的
-  解析候选；若该候选为 reject，则借用前面的首个 direct 候选完成解析判断。
-- 后匹配仍严格按 YAML 顺序首个生效。若出口改变，使用新出口的独立 Resolver
-  重新解析一次，但不再次匹配，防止策略振荡。
-- 直接 IP flow 使用 literal destination 直接完成 CIDR 后匹配，不执行 DNS。
-- fallback 只改变实际解析/连接路径，不改写已经冻结的规则 ID 与策略出口。
+若结论规则是 reject，但前面存在可能因 CIDR 胜出的 direct 候选，会借用第一个可解析候选完成
+地址判断。第二次解析不再次触发规则匹配，避免不同出口 DNS 答案造成策略振荡。
 
-## 3. Outbound 接口
+fallback 只影响实际解析或连接路径，不改写已经冻结的 RuleID 和策略 Outbound。
+
+## 4. Outbound
+
+当前内部路由抽象等价于：
 
 ```go
-type Outbound interface {
-    DialContext(ctx context.Context, network string, dst Destination) (net.Conn, error)
-    ListenPacket(ctx context.Context, dst Destination) (net.PacketConn, error)
+type Dialer interface {
+    DialContext(ctx context.Context, network string, dst netip.AddrPort) (net.Conn, error)
+}
+
+type PacketDialer interface {
+    DialPacket(ctx context.Context, dst netip.AddrPort) (net.Conn, error)
 }
 ```
 
-初始类型：
+当前配置类型：
 
-- `direct`：绑定指定物理接口建立连接。
-- `reject`：拒绝 TCP 或丢弃/拒绝 UDP。
+- `direct`：拥有接口绑定 Resolver、TCP Dialer、UDP PacketDialer 和可选 fallback。
+- `reject`：终止规则，不允许配置接口、Resolver 或 fallback。
 
-后续可扩展 SOCKS、HTTP CONNECT 或加密隧道，但不能改变规则引擎对 Outbound 的抽象。
+SOCKS、HTTP CONNECT 和加密隧道尚未实现；未来扩展不得改变规则引擎的无 I/O 边界和单流
+不可变决策语义。
 
-## 4. macOS 接口绑定
+## 5. macOS 接口绑定
 
-在 `connect()` 前设置：
+每个新 Socket 在 `connect(2)` 前按确定地址族设置：
 
 - IPv4：`IP_BOUND_IF`
-- IPv6：`IPV6_BOUND_IF`；Phase 8.1 已完成出口 socket 与 DNS 上游基础，完整 Fake
-  IPv6 数据面在 Phase 8.2–8.3 接入
+- IPv6：`IPV6_BOUND_IF`
 
-要求：
+接口名在每次创建 Socket 时重新解析为系统索引，并确认接口仍为 Up。接口不存在、Down 或
+地址族不确定时返回显式错误，不允许静默使用系统默认接口。真实 DNS Socket 与业务 Socket
+必须使用相同绑定策略。
 
-- 使用接口索引，不依赖接口名称推断类型。
-- 创建连接前确认接口仍存在且 Up。
-- 接口无有效路由时返回清晰错误，不静默改走默认接口。
-- 用 `tcpdump` 验证真实流量出现在目标接口。
+## 6. fallback
 
-## 5. fallback
+- fallback 引用和环路在配置编译时校验。
+- 只对接口不存在/Down、无路由、网络或主机不可达、地址不可用和超时等可恢复环境错误尝试。
+- context 取消、策略 reject 和 DNS NXDOMAIN 等业务错误为终止错误。
+- Resolver fallback 与连接 fallback 都保留完整错误链。
+- `reject` 是终止节点，不能再 fallback。
 
-- fallback 引用在启动时解析成有向无环链。
-- 只在接口不存在、无路由或连接超时等可恢复错误上 fallback。
-- DNS NXDOMAIN、证书错误等业务错误不能随意触发 fallback。
-- 每次 fallback 记录原出口、目标出口和错误类别。
-- `reject` 是终止节点。
-
-## 6. 每出口独立 Resolver
+## 7. 每出口独立 Resolver
 
 ```text
 规则选择 wired
 → wired Resolver 的 DNS Socket 绑定 wired
-→ 得到真实 IP
-→ 业务 Socket 同样绑定 wired
+→ 得到 wired 视角的真实地址
+→ wired TCP/UDP Socket 同样绑定 wired
 ```
 
-Resolver 支持显式上游、UDP、TC 后 TCP 回退、超时、有限重试、独立缓存、查询取消和接口消失快速失败。禁止使用已指向 `127.0.0.1` 的系统 Resolver 查询真实地址。
+- 每个 direct 出口创建独立 Resolver 和 TTL 缓存，答案不跨出口共享。
+- A 与 AAAA 使用独立 cache key。
+- `dns_source: dhcp` 优先采用该接口实时发现的 DHCP DNS，静态列表作为发现失败时的回退。
+- `dns_source: static` 始终使用配置列表。
+- 支持多个上游、UDP、TC 后 TCP、超时、取消和并发限制。
+- 禁止调用已经指向 `127.0.0.1` Fake DNS 的系统默认 Resolver。
 
-## 7. 域名与地址选择
+## 8. 域名与地址选择
 
-- 保留原始域名直到出口连接建立完成。
-- TLS 端到端透明，代理不解密 TLS。
-- 多个 A 记录由出口排序、逐个尝试并聚合错误。
-- DNS 缓存键至少包含域名、查询类型和 Outbound。
+- 原始规范化域名保留到最终出口连接完成。
+- TLS 端到端透明，项目不解密、不读取 Host/SNI。
+- Resolver 返回全部同族 A/AAAA 地址，连接层按返回顺序逐个尝试并聚合错误。
+- direct-IP flow 不执行 DNS，使用 literal destination 完成 CIDR 后匹配和连接。
+- Fake IPv6 只在宿主 IPv6 能力门控通过时对外提供，且不提供 NAT64。
 
-## 8. 接口变化
+## 9. reload 与接口变化
 
-- 新流使用最新接口快照和规则。
-- 已建立 TCP 流不迁移。
-- 接口消失后新连接走 fallback 或 reject。
-- 已建立 UDP 会话在接口消失时关闭。
-- 接口恢复后可供新流选择，属于 Beta 目标。
+- reload 先构造完整 next generation，成功后原子切换。
+- 新流使用最新规则、接口 DNS 和 route；既有 TCP/UDP 会话保持原 generation。
+- 运行时周期性重新发现 DHCP DNS；选择性捕获模式可刷新新 generation 和 Fake DNS 上游。
+- `capture.default_route: true` 时，outbound 接口/DNS/fallback 拓扑不可热更新，因为它参与已安装旁路。
+- split-default 运行中若旁路拓扑需要重建，服务安全停止并回滚，等待显式重启。
