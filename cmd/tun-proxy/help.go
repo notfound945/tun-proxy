@@ -155,8 +155,16 @@ Run "tun-proxy help service <command>" for details.
 
 {{generated-options}}
 `,
-	"service start":   "usage: tun-proxy service start\n",
-	"service stop":    "usage: tun-proxy service stop\n",
+	"service start": `usage: tun-proxy service start
+
+Starts the installed service and waits up to 20 seconds for runtime readiness.
+On failure, run "sudo tun-proxy service logs" to inspect managed stdout/stderr.
+`,
+	"service stop": `usage: tun-proxy service stop
+
+Stops the installed service cleanly.
+On failure, run "sudo tun-proxy service logs" to inspect managed stdout/stderr.
+`,
 	"service restart": "usage: tun-proxy service restart\n",
 	"service reload": `usage: tun-proxy service reload [options]
 
@@ -165,7 +173,8 @@ Run "tun-proxy help service <command>" for details.
 Without -config or -user-config, the installed configuration is re-read.
 -user-config selects the invoking user's ~/.config/tun-proxy/config.yaml; -config
 selects an explicit path. The source is validated and transactionally applied,
-with rollback when runtime acknowledgement fails.
+with rollback when runtime acknowledgement fails. On failure, run
+"sudo tun-proxy service logs" to inspect managed stdout/stderr.
 `,
 	"service status": `usage: tun-proxy service status [options]
 

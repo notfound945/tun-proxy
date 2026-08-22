@@ -53,6 +53,78 @@ func TestServiceCommandRejectsUnknownSubcommand(t *testing.T) {
 	}
 }
 
+type serviceStarterFunc func(context.Context) error
+
+func (start serviceStarterFunc) Start(ctx context.Context) error {
+	return start(ctx)
+}
+
+func TestServiceStartCommandAddsLogsHintOnStartFailure(t *testing.T) {
+	want := errors.New("service did not become ready after 20s")
+	err := serviceStartCommand(context.Background(), serviceStarterFunc(func(context.Context) error {
+		return want
+	}), nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("serviceStartCommand() error = %v, want wrapped %v", err, want)
+	}
+	if !strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("serviceStartCommand() error = %q, want command %q", err, serviceLogsHintCommand)
+	}
+}
+
+func TestServiceStartCommandRejectsArgumentsWithoutLogsHint(t *testing.T) {
+	started := false
+	err := serviceStartCommand(context.Background(), serviceStarterFunc(func(context.Context) error {
+		started = true
+		return nil
+	}), []string{"unexpected"})
+	if err == nil || !strings.Contains(err.Error(), "does not accept arguments") {
+		t.Fatalf("serviceStartCommand() error = %v", err)
+	}
+	if started {
+		t.Fatal("service was started before rejecting arguments")
+	}
+	if strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("argument error unexpectedly included logs hint: %q", err)
+	}
+}
+
+type serviceStopperFunc func(context.Context) error
+
+func (stop serviceStopperFunc) Stop(ctx context.Context) error {
+	return stop(ctx)
+}
+
+func TestServiceStopCommandAddsLogsHintOnStopFailure(t *testing.T) {
+	want := errors.New("service did not stop cleanly")
+	err := serviceStopCommand(context.Background(), serviceStopperFunc(func(context.Context) error {
+		return want
+	}), nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("serviceStopCommand() error = %v, want wrapped %v", err, want)
+	}
+	if !strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("serviceStopCommand() error = %q, want command %q", err, serviceLogsHintCommand)
+	}
+}
+
+func TestServiceStopCommandRejectsArgumentsWithoutLogsHint(t *testing.T) {
+	stopped := false
+	err := serviceStopCommand(context.Background(), serviceStopperFunc(func(context.Context) error {
+		stopped = true
+		return nil
+	}), []string{"unexpected"})
+	if err == nil || !strings.Contains(err.Error(), "does not accept arguments") {
+		t.Fatalf("serviceStopCommand() error = %v", err)
+	}
+	if stopped {
+		t.Fatal("service was stopped before rejecting arguments")
+	}
+	if strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("argument error unexpectedly included logs hint: %q", err)
+	}
+}
+
 func TestServiceInstallCommandAddsLogsHintToArgumentError(t *testing.T) {
 	err := serviceInstallCommand(context.Background(), nil, []string{"unexpected"})
 	if err == nil || !strings.Contains(err.Error(), "unexpected arguments") {

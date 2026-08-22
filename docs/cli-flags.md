@@ -288,7 +288,8 @@ sudo tun-proxy service install -start-at-boot=true
 sudo tun-proxy service start
 ```
 
-启动已安装的服务并等待就绪。该命令没有参数。
+启动已安装的服务并等待就绪，最长等待 20 秒。该命令没有参数。启动失败（包括等待就绪超时）时，
+错误信息会提示运行 `sudo tun-proxy service logs` 查看托管服务的 stdout/stderr 日志。
 
 ### `service stop`
 
@@ -296,7 +297,8 @@ sudo tun-proxy service start
 sudo tun-proxy service stop
 ```
 
-干净停止服务并保留安装状态，之后可以通过 `service start` 再次启动。该命令没有参数。
+干净停止服务并保留安装状态，之后可以通过 `service start` 再次启动。该命令没有参数。停止失败时，
+错误信息会提示运行 `sudo tun-proxy service logs` 查看托管服务日志。
 
 ### `service restart`
 
@@ -332,7 +334,7 @@ sudo tun-proxy service reload \
 然后将校验过的同一份字节内容原子同步到托管配置路径，发送重载信号并等待 worker 以
 配置摘要确认应用成功。如果预检失败，托管配置不会改变；如果运行时拒绝、确认超时或
 摘要不一致，CLI 会恢复旧托管配置，并再次触发重载以恢复旧运行配置。服务必须已经安装
-且正在运行。
+且正在运行。重载操作失败时，错误信息会提示运行 `sudo tun-proxy service logs` 查看托管服务日志。
 
 ### `service status`
 

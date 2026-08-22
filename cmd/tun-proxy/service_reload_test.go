@@ -98,6 +98,26 @@ func TestServiceReloadFlagsAcceptConfigPath(t *testing.T) {
 	}
 }
 
+func TestServiceReloadCommandAddsLogsHintOnOperationalFailure(t *testing.T) {
+	err := serviceReloadCommand(context.Background(), &launchservice.Manager{}, nil)
+	if err == nil {
+		t.Fatal("serviceReloadCommand() error = nil")
+	}
+	if !strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("serviceReloadCommand() error = %q, want command %q", err, serviceLogsHintCommand)
+	}
+}
+
+func TestServiceReloadCommandRejectsOptionsWithoutLogsHint(t *testing.T) {
+	err := serviceReloadCommand(context.Background(), nil, []string{"-timeout", "0s"})
+	if err == nil || !strings.Contains(err.Error(), "timeout must be positive") {
+		t.Fatalf("serviceReloadCommand() error = %v", err)
+	}
+	if strings.Contains(err.Error(), serviceLogsHintCommand) {
+		t.Fatalf("option error unexpectedly included logs hint: %q", err)
+	}
+}
+
 func TestServiceReloadUserConfigUsesInvokingUserDefaultPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

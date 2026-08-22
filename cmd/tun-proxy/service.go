@@ -35,29 +35,9 @@ func serviceCommand(args []string) error {
 	case "install":
 		return serviceInstallCommand(ctx, manager, args[1:])
 	case "start":
-		if hasOnlyHelpArgument(args[1:]) {
-			return helpCommand([]string{"service", "start"})
-		}
-		if len(args) != 1 {
-			return errors.New("service start does not accept arguments")
-		}
-		if err := manager.Start(ctx); err != nil {
-			return err
-		}
-		fmt.Println("tun-proxy service started")
-		return nil
+		return serviceStartCommand(ctx, manager, args[1:])
 	case "stop":
-		if hasOnlyHelpArgument(args[1:]) {
-			return helpCommand([]string{"service", "stop"})
-		}
-		if len(args) != 1 {
-			return errors.New("service stop does not accept arguments")
-		}
-		if err := manager.Stop(ctx); err != nil {
-			return err
-		}
-		fmt.Println("tun-proxy service stopped")
-		return nil
+		return serviceStopCommand(ctx, manager, args[1:])
 	case "restart":
 		if hasOnlyHelpArgument(args[1:]) {
 			return helpCommand([]string{"service", "restart"})
@@ -92,6 +72,42 @@ func hasOnlyHelpArgument(args []string) bool {
 	return len(args) == 1 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help")
 }
 
+type serviceStarter interface {
+	Start(context.Context) error
+}
+
+func serviceStartCommand(ctx context.Context, starter serviceStarter, args []string) error {
+	if hasOnlyHelpArgument(args) {
+		return helpCommand([]string{"service", "start"})
+	}
+	if len(args) != 0 {
+		return errors.New("service start does not accept arguments")
+	}
+	if err := starter.Start(ctx); err != nil {
+		return withServiceLogsHint(err)
+	}
+	fmt.Println("tun-proxy service started")
+	return nil
+}
+
+type serviceStopper interface {
+	Stop(context.Context) error
+}
+
+func serviceStopCommand(ctx context.Context, stopper serviceStopper, args []string) error {
+	if hasOnlyHelpArgument(args) {
+		return helpCommand([]string{"service", "stop"})
+	}
+	if len(args) != 0 {
+		return errors.New("service stop does not accept arguments")
+	}
+	if err := stopper.Stop(ctx); err != nil {
+		return withServiceLogsHint(err)
+	}
+	fmt.Println("tun-proxy service stopped")
+	return nil
+}
+
 type serviceReloadOptions struct {
 	timeout       time.Duration
 	configPath    string
@@ -109,7 +125,7 @@ func newServiceReloadFlagSet(output io.Writer, options *serviceReloadOptions) *f
 	return flags
 }
 
-func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, args []string) error {
+func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, args []string) (resultErr error) {
 	options := serviceReloadOptions{}
 	flags := newServiceReloadFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
@@ -125,6 +141,10 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 	if err != nil {
 		return err
 	}
+	defer func() {
+		resultErr = withServiceLogsHint(resultErr)
+	}()
+
 	status, err := manager.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect service before reload: %w", err)
