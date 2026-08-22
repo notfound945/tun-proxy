@@ -855,12 +855,3 @@ func appendUnique(values []string, value string) []string {
 	}
 	return append(values, value)
 }
-
-func appendUniquePort(values []uint16, value uint16) []uint16 {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
