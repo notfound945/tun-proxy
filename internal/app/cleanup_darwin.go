@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 
 	"github.com/hailinpan/tun-proxy/internal/daemon"
@@ -17,6 +18,16 @@ import (
 
 func Cleanup(ctx context.Context, statePath, fallbackLockPath string) error {
 	return CleanupWithStatusOwners(ctx, statePath, fallbackLockPath, uint32(os.Geteuid()))
+}
+
+// ClearManagedDNS resets network services that still point exclusively at the
+// configured tun-proxy loopback resolver. It is a conservative recovery path
+// for cases where no usable state record remains.
+func ClearManagedDNS(ctx context.Context, replacement netip.Addr) ([]string, error) {
+	if err := system.RequireRoot(); err != nil {
+		return nil, err
+	}
+	return system.ClearDNSReplacement(ctx, system.NativeCommandRunner{}, replacement)
 }
 
 // CleanupWithStatusOwners performs crash recovery while restricting status

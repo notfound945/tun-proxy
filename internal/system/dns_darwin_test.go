@@ -126,6 +126,75 @@ func TestRestoreDNSRefusesExternalChange(t *testing.T) {
 	}
 }
 
+func TestClearDNSReplacementOnlyResetsExactManagedValue(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]string{
+		networkSetup + " -listnetworkserviceorder": `An asterisk (*) denotes that a network service is disabled.
+(1) Wi-Fi
+(Hardware Port: Wi-Fi, Device: en0)
+
+(2) USB LAN
+(Hardware Port: USB LAN, Device: en7)
+
+(3) Custom DNS
+(Hardware Port: Ethernet, Device: en8)
+
+(*) Disabled
+(Hardware Port: Ethernet, Device: en9)
+`,
+		networkSetup + " -getdnsservers Wi-Fi":      "127.0.0.1\n",
+		networkSetup + " -getdnsservers USB LAN":    "9.9.9.9\n",
+		networkSetup + " -getdnsservers Custom DNS": "127.0.0.1\n8.8.8.8\n",
+	}, fail: make(map[string]error)}
+
+	cleared, err := ClearDNSReplacement(t.Context(), runner, netip.MustParseAddr("127.0.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cleared, []string{"Wi-Fi"}) {
+		t.Fatalf("cleared = %v", cleared)
+	}
+	wantMutation := []string{"-setdnsservers", "Wi-Fi", "Empty"}
+	mutations := 0
+	for _, call := range runner.calls {
+		if len(call.args) != 0 && call.args[0] == "-setdnsservers" {
+			mutations++
+			if !reflect.DeepEqual(call.args, wantMutation) {
+				t.Fatalf("mutation = %v, want %v", call.args, wantMutation)
+			}
+		}
+	}
+	if mutations != 1 {
+		t.Fatalf("mutation count = %d, calls = %v", mutations, runner.calls)
+	}
+}
+
+func TestClearDNSReplacementReportsInspectionFailuresAndContinues(t *testing.T) {
+	failedKey := networkSetup + " -getdnsservers Wi-Fi"
+	runner := &fakeRunner{responses: map[string]string{
+		networkSetup + " -listnetworkserviceorder": `(1) Wi-Fi
+(Hardware Port: Wi-Fi, Device: en0)
+
+(2) USB LAN
+(Hardware Port: USB LAN, Device: en7)
+`,
+		networkSetup + " -getdnsservers USB LAN": "127.0.0.1\n",
+	}, fail: map[string]error{failedKey: errors.New("inspection failed")}}
+
+	cleared, err := ClearDNSReplacement(t.Context(), runner, netip.MustParseAddr("127.0.0.1"))
+	if err == nil || !strings.Contains(err.Error(), "inspection failed") {
+		t.Fatalf("ClearDNSReplacement() error = %v", err)
+	}
+	if !reflect.DeepEqual(cleared, []string{"USB LAN"}) {
+		t.Fatalf("cleared = %v", cleared)
+	}
+}
+
+func TestClearDNSReplacementRejectsNonLoopback(t *testing.T) {
+	if _, err := ClearDNSReplacement(t.Context(), &fakeRunner{}, netip.MustParseAddr("192.0.2.1")); err == nil {
+		t.Fatal("ClearDNSReplacement accepted a non-loopback replacement")
+	}
+}
+
 func TestApplyDNSReturnsCompletedPrefixOnFailure(t *testing.T) {
 	failedKey := networkSetup + " -setdnsservers USB LAN 127.0.0.1"
 	runner := &fakeRunner{responses: make(map[string]string), fail: map[string]error{failedKey: errors.New("failed")}}

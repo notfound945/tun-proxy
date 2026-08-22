@@ -8,10 +8,15 @@ sudo tun-proxy check -config ./config.yaml
 sudo tun-proxy run -config ./config.yaml
 sudo tun-proxy status
 sudo tun-proxy cleanup
+sudo tun-proxy cleanup -clear-dns -config ./config.yaml
+sudo tun-proxy cleanup -clear-fake-ip -config ./config.yaml
 tun-proxy version
 ```
 
-程序通过文件锁保证单实例运行。`cleanup` 只能删除由本程序状态日志明确记录的路由和 DNS 修改。
+程序通过文件锁保证单实例运行。普通 `cleanup` 只恢复由状态日志明确记录、且当前值仍归本程序
+所有的路由和 DNS 修改。状态文件丢失时，`-clear-dns` 可以保守地把完整 DNS 列表仍恰好等于
+配置中 `dns.listen` 地址的已启用网络服务重置为自动/DHCP DNS；`-clear-fake-ip` 用于删除配置
+对应的 Fake IP 快照和 WAL。两个 clear flag 共用一次实例锁，也可以同时使用。
 
 ## 2. YAML 示例
 
@@ -141,7 +146,7 @@ rules:
 - 默认规则位置。
 - 启用 `capture.default_route` 时，每个 direct 出口 DNS 的 scoped 物理网关、主机旁路
   唯一所有权及地址族一致性。
-- 域名、协议、端口和 Duration。
+- 域名、CIDR 和 Duration。
 - 状态、锁和持久化目录。
 - 当前用户权限。
 

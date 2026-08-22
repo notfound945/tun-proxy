@@ -252,6 +252,18 @@ system:
 
 恢复操作带有所有权保护：如果退出时发现当前 DNS 已被用户或其他程序改成不同值，`tun-proxy` 不会盲目覆盖，而会保留恢复状态供诊断或后续清理。
 
+正常退出和普通 `sudo tun-proxy cleanup` 都优先使用 `system.state_file` 中记录的原值精确恢复
+DNS。如果状态文件已经丢失，但网络服务仍残留 tun-proxy 的本地 DNS，可以执行：
+
+```sh
+sudo tun-proxy cleanup -clear-dns \
+  -config ~/.config/tun-proxy/config.yaml
+```
+
+该兜底操作读取当前配置的 `dns.listen` 地址，并扫描当前已启用的 macOS 网络服务，包括当前
+不活跃的服务。只有服务的完整 DNS 列表恰好等于这个单一本地地址时，才会将其重置为
+自动/DHCP DNS；手动 DNS、混合 DNS 列表或已经被其他程序修改的值不会被覆盖。
+
 ## 7. `capture`
 
 ```yaml
@@ -380,7 +392,15 @@ sudo tun-proxy cleanup -clear-fake-ip \
   -config ~/.config/tun-proxy/config.yaml
 ```
 
-`cleanup` 需要通过配置读取 persistence 路径；执行前应先停止前台实例或托管服务。它会先恢复记录的系统状态，并确认实例锁空闲后再删除 Fake IP 数据。
+`cleanup` 需要通过配置读取 persistence 路径；执行前应先停止前台实例或托管服务。它会先恢复
+记录的系统状态，并确认实例锁空闲后再删除 Fake IP 数据。也可以与 DNS 兜底清理合并执行：
+
+```sh
+sudo tun-proxy cleanup -clear-dns -clear-fake-ip \
+  -config ~/.config/tun-proxy/config.yaml
+```
+
+两个 clear flag 共用一次实例锁。
 
 ## 10. `fake_ipv6`
 

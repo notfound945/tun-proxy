@@ -94,6 +94,28 @@ and `/etc/hosts` entries that would bypass Fake DNS policy. Domain suffixes use
 DNS label boundaries: `cursor.sh` and `api.cursor.sh` match `cursor.sh`, while
 `not-cursor.sh` does not.
 
+### Cleanup recovery
+
+```sh
+sudo tun-proxy cleanup
+sudo tun-proxy cleanup -clear-dns -config ~/.config/tun-proxy/config.yaml
+sudo tun-proxy cleanup -clear-fake-ip -config ~/.config/tun-proxy/config.yaml
+sudo tun-proxy cleanup -clear-dns -clear-fake-ip \
+  -config ~/.config/tun-proxy/config.yaml
+```
+
+Plain cleanup restores DNS and routes from the managed state record while
+preserving ownership checks. `-clear-dns` is a conservative recovery path for
+a missing state record: it resets an enabled macOS network service to automatic
+DNS only when the service's complete current DNS list is the single configured
+`dns.listen` address. It includes enabled services that are currently inactive,
+but does not overwrite custom, mixed, or externally changed DNS lists.
+
+`-clear-fake-ip` removes the configured IPv4/IPv6 snapshots and journals. Both
+clear flags first run recorded-state recovery and share one instance-lock guard,
+so either operation is refused while another instance may be starting or
+running.
+
 ### Managed-service lifecycle and logs
 
 ```sh
@@ -118,11 +140,11 @@ following.
 
 ## Acceptance status
 
-As of 2026-08-19, command routing, help topics, configuration validation,
+As of 2026-08-22, command routing, help topics, configuration validation,
 domain-suffix boundaries, offline/pending and resolved explain decisions,
 partial diagnosis, service manager restart/reload signaling, reload success and
-failure confirmation, log tail edge cases, and symlink rejection are covered by
-automated tests.
+failure confirmation, cleanup recovery safety, log tail edge cases, and symlink
+rejection are covered by automated tests.
 
 The remaining root acceptance is intentionally deferred to a maintenance
 window so the currently running managed service is not disturbed:

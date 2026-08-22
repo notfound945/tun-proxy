@@ -131,8 +131,10 @@ file and status socket; without sudo it still reports available checks.
 
 {{generated-options}}
 
--clear-fake-ip loads -config, restores recorded system state, verifies the
-instance lock is free, and removes configured IPv4/IPv6 snapshots and WALs.
+-clear-dns and -clear-fake-ip load -config, restore recorded system state, and
+share one instance-lock guard. DNS clearing only resets services whose complete
+DNS list still equals the configured local listener; Fake IP clearing removes
+configured IPv4/IPv6 snapshots and WALs.
 `,
 	"service": `usage: tun-proxy service <command> [options]
 

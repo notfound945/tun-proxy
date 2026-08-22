@@ -318,6 +318,7 @@ type cleanupOptions struct {
 	statePath   string
 	lockPath    string
 	timeout     time.Duration
+	clearDNS    bool
 	clearFakeIP bool
 }
 
@@ -330,6 +331,7 @@ func newCleanupFlagSet(output io.Writer, options *cleanupOptions) *flag.FlagSet 
 	flags.StringVar(&options.statePath, "state", "/var/run/tun-proxy/state.json", "runtime state `PATH`")
 	flags.StringVar(&options.lockPath, "lock", "/var/run/tun-proxy/tun-proxy.lock", "fallback stale lock `PATH`")
 	flags.DurationVar(&options.timeout, "timeout", cleanupCommandTimeout, "maximum cleanup `DURATION`")
+	flags.BoolVar(&options.clearDNS, "clear-dns", false, "reset network services still using the configured local DNS listener")
 	flags.BoolVar(&options.clearFakeIP, "clear-fake-ip", false, "remove configured Fake IP snapshots and journals")
 	return flags
 }
@@ -349,7 +351,7 @@ func cleanupCommand(args []string) error {
 	specified := make(map[string]bool)
 	flags.Visit(func(item *flag.Flag) { specified[item.Name] = true })
 	var runtime *config.Config
-	if options.clearFakeIP || specified["config"] {
+	if options.clearDNS || options.clearFakeIP || specified["config"] {
 		var err error
 		runtime, err = config.LoadFile(options.configPath)
 		if err != nil {
@@ -369,19 +371,28 @@ func cleanupCommand(args []string) error {
 	if err := app.Cleanup(cleanupCtx, options.statePath, options.lockPath); err != nil {
 		return err
 	}
+	var resetServices []string
 	var removed []string
-	if options.clearFakeIP {
+	if options.clearDNS || options.clearFakeIP {
 		guard, err := daemon.Acquire(options.lockPath)
 		if err != nil {
-			return fmt.Errorf("refuse to clear Fake IP persistence while another instance may be starting or running: %w", err)
+			return fmt.Errorf("refuse cleanup clear operation while another instance may be starting or running: %w", err)
 		}
-		removed, err = clearFakeIPPersistence(runtime)
+		if options.clearDNS {
+			resetServices, err = app.ClearManagedDNS(cleanupCtx, runtime.DNS.Listen.Addr())
+		}
+		if err == nil && options.clearFakeIP {
+			removed, err = clearFakeIPPersistence(runtime)
+		}
 		if closeErr := guard.Close(); closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
 		if err != nil {
 			return err
 		}
+	}
+	for _, service := range resetServices {
+		fmt.Printf("reset DNS service %s to automatic\n", service)
 	}
 	for _, path := range removed {
 		fmt.Printf("removed Fake IP persistence %s\n", path)

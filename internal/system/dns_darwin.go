@@ -105,6 +105,44 @@ func RestoreDNS(ctx context.Context, runner CommandRunner, states []DNSState) (r
 	return remaining, errors.Join(failures...)
 }
 
+// ClearDNSReplacement resets enabled network services to automatic/DHCP DNS
+// only when their complete current DNS list exactly matches replacement. This
+// strict ownership check avoids overwriting custom or externally changed DNS.
+// Unlike SnapshotDNS, it intentionally includes currently inactive services:
+// a service may have gone down after tun-proxy applied its local resolver.
+func ClearDNSReplacement(ctx context.Context, runner CommandRunner, replacement netip.Addr) (cleared []string, err error) {
+	if !replacement.IsValid() || !replacement.IsLoopback() {
+		return nil, fmt.Errorf("DNS replacement %s is not loopback", replacement)
+	}
+	output, err := runner.Run(ctx, networkSetup, "-listnetworkserviceorder")
+	if err != nil {
+		return nil, fmt.Errorf("list network service order: %w", err)
+	}
+	want := []string{replacement.String()}
+	seen := make(map[string]struct{})
+	var failures []error
+	for _, service := range parseNetworkServiceOrder(string(output)) {
+		if _, exists := seen[service.Name]; exists {
+			continue
+		}
+		seen[service.Name] = struct{}{}
+		current, getErr := getDNS(ctx, runner, service.Name)
+		if getErr != nil {
+			failures = append(failures, getErr)
+			continue
+		}
+		if !slices.Equal(current, want) {
+			continue
+		}
+		if setErr := setDNS(ctx, runner, service.Name, nil); setErr != nil {
+			failures = append(failures, setErr)
+			continue
+		}
+		cleared = append(cleared, service.Name)
+	}
+	return cleared, errors.Join(failures...)
+}
+
 func getDNS(ctx context.Context, runner CommandRunner, service string) ([]string, error) {
 	output, err := runner.Run(ctx, networkSetup, "-getdnsservers", service)
 	if err != nil {

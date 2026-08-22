@@ -230,21 +230,30 @@ sudo tun-proxy cleanup
 sudo tun-proxy cleanup \
   -state /var/run/tun-proxy/state.json \
   -lock /var/run/tun-proxy/tun-proxy.lock
+sudo tun-proxy cleanup -clear-dns \
+  -config ~/.config/tun-proxy/config.yaml
 sudo tun-proxy cleanup -clear-fake-ip \
+  -config ~/.config/tun-proxy/config.yaml
+sudo tun-proxy cleanup -clear-dns -clear-fake-ip \
   -config ~/.config/tun-proxy/config.yaml
 ```
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `-config PATH` | `~/.config/tun-proxy/config.yaml` | 清理 Fake IP 时用于读取持久化、状态和锁路径的配置文件。 |
+| `-config PATH` | `~/.config/tun-proxy/config.yaml` | 使用 clear flag 时读取 `dns.listen`、Fake IP 持久化路径、状态路径和锁路径的配置文件。 |
 | `-state PATH` | `/var/run/tun-proxy/state.json` | 要恢复的已记录系统状态；显式传入时覆盖配置值。 |
 | `-lock PATH` | `/var/run/tun-proxy/tun-proxy.lock` | 备用的陈旧进程锁路径；显式传入时覆盖配置值。 |
 | `-timeout DURATION` | `30s` | cleanup 的最大执行时间。 |
+| `-clear-dns` | `false` | 将完整 DNS 列表仍恰好等于配置中 `dns.listen` 地址的已启用网络服务重置为自动/DHCP DNS。 |
 | `-clear-fake-ip` | `false` | 删除配置的 IPv4/IPv6 Fake IP 快照和对应 `.wal`。 |
 
-异常退出后如残留已记录状态，可使用 `cleanup` 恢复。`-clear-fake-ip` 会先恢复系统状态，
-然后持有实例锁再删除映射；实例仍在启动或运行时会拒绝清理。正常的前台退出和托管服务停止
-会自行恢复各自事务修改的系统状态，但不会自动删除 Fake IP 映射。
+异常退出后如残留已记录状态，可使用普通 `cleanup` 精确恢复原 DNS 和路由。状态文件缺失时，
+`-clear-dns` 提供保守兜底：它也会检查当前不活跃但仍启用的网络服务，但只修改完整 DNS 列表
+仍为单个 `dns.listen` 地址的服务，不覆盖手动 DNS、混合 DNS 列表或外部程序已经修改的值。
+
+`-clear-dns` 与 `-clear-fake-ip` 可以单独或同时使用。两者都会先恢复可用的记录状态，然后
+共用一次实例锁执行额外清理；实例仍在启动或运行时会拒绝操作。正常的前台退出和托管服务
+停止会自行恢复各自事务修改的系统状态，但不会自动删除 Fake IP 映射。
 
 ## 托管服务
 

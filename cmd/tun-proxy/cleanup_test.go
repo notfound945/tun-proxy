@@ -20,13 +20,13 @@ func TestCleanupCommandRejectsNonPositiveTimeout(t *testing.T) {
 	}
 }
 
-func TestCleanupFlagsIncludeFakeIPClearConfiguration(t *testing.T) {
+func TestCleanupFlagsIncludeClearConfiguration(t *testing.T) {
 	options := cleanupOptions{}
 	flags := newCleanupFlagSet(io.Discard, &options)
-	if err := flags.Parse([]string{"-config", "/tmp/config.yaml", "-clear-fake-ip"}); err != nil {
+	if err := flags.Parse([]string{"-config", "/tmp/config.yaml", "-clear-dns", "-clear-fake-ip"}); err != nil {
 		t.Fatal(err)
 	}
-	if options.configPath != "/tmp/config.yaml" || !options.clearFakeIP {
+	if options.configPath != "/tmp/config.yaml" || !options.clearDNS || !options.clearFakeIP {
 		t.Fatalf("options = %+v", options)
 	}
 }

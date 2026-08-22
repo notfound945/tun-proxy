@@ -148,7 +148,24 @@ sudo tun-proxy service reload
 sudo tun-proxy service logs -follow
 ```
 
-## 清理 Fake IP 持久化映射
+## 清理残留 DNS 与 Fake IP 持久化映射
+
+普通 `cleanup` 会根据状态文件精确恢复 tun-proxy 记录的原 DNS 和路由：
+
+```sh
+sudo tun-proxy cleanup
+```
+
+如果状态文件已经丢失，但某个已启用的 macOS 网络服务仍然只使用配置中的
+`dns.listen` 地址，可以使用保守兜底清理，将它重置为自动/DHCP DNS：
+
+```sh
+sudo tun-proxy cleanup -clear-dns \
+  -config ~/.config/tun-proxy/config.yaml
+```
+
+`-clear-dns` 只有在服务的完整 DNS 列表恰好等于 `dns.listen` 地址时才会修改该服务；
+手动 DNS、混合 DNS 列表以及已经被其他程序修改的 DNS 都不会被覆盖。
 
 停止前台实例或托管服务后，可以通过配置文件定位并删除 IPv4/IPv6 Fake IP 快照及 WAL：
 
@@ -157,7 +174,15 @@ sudo tun-proxy cleanup -clear-fake-ip \
   -config ~/.config/tun-proxy/config.yaml
 ```
 
-该命令会先执行系统状态恢复并持有实例锁；如果仍有实例正在启动或运行，会拒绝删除。
+两个清理项也可以同时执行：
+
+```sh
+sudo tun-proxy cleanup -clear-dns -clear-fake-ip \
+  -config ~/.config/tun-proxy/config.yaml
+```
+
+两个 clear flag 都会先执行系统状态恢复，并共用一次实例锁；如果仍有实例正在启动或运行，
+命令会拒绝执行兜底 DNS 重置或删除 Fake IP 数据。
 
 ## 快速配置
 

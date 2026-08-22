@@ -27,6 +27,9 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 	if usage := renderedUsage("cleanup"); !strings.Contains(usage, "-timeout DURATION") {
 		t.Fatalf("cleanup help missing timeout flag: %s", usage)
 	}
+	if usage := renderedUsage("cleanup"); !strings.Contains(usage, "-clear-dns") {
+		t.Fatalf("cleanup help missing DNS clear flag: %s", usage)
+	}
 	if usage := renderedUsage("service install"); !strings.Contains(usage, "-start-at-boot") {
 		t.Fatalf("service install help missing boot-start flag: %s", usage)
 	}
