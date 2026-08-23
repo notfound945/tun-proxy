@@ -420,6 +420,9 @@ tun-proxy self-update
 该命令会下载同一个 `update-release.sh` 并通过 Bash 执行；必须以普通用户运行，不能在
 整个命令前添加 `sudo`。
 
+无参数更新会先查询 GitHub 的最新 Release。如果当前 CLI 版本相同，脚本会提示已是最新版本并
+直接退出，不再下载安装器、Release 压缩包或升级托管服务。
+
 在仓库源码目录内开发或测试脚本时，也可以直接运行
 `./scripts/update-release.sh [version-or-archive]`。
 

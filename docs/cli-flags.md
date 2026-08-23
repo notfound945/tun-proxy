@@ -65,8 +65,9 @@ curl -fsSL \
   https://raw.githubusercontent.com/notfound945/tun-proxy/master/scripts/update-release.sh | bash
 ```
 
-一致。必须以普通用户运行，不要使用 `sudo tun-proxy self-update`；更新脚本会在替换
-`/usr/local/bin/tun-proxy` 或托管服务文件时自行请求权限。`UPDATE_SERVICE_CONFIG`、
+一致。脚本会先查询 GitHub 的最新 Release；当前 CLI 版本相同时会提示已是最新版本并
+直接退出，不再下载安装器、Release 压缩包或升级托管服务。必须以普通用户运行，不要使用
+`sudo tun-proxy self-update`；更新脚本会在替换系统文件时自行请求权限。`UPDATE_SERVICE_CONFIG`、
 `START_SERVICE`、`PREFIX` 等更新脚本环境变量会原样继承，例如：
 
 ```sh

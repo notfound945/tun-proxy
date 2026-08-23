@@ -144,7 +144,9 @@ configured IPv4/IPv6 snapshots and WALs.
 
 Downloads the release updater from:
   https://raw.githubusercontent.com/notfound945/tun-proxy/master/scripts/update-release.sh
-and executes it with /bin/bash. This is the same update flow documented for
+and executes it with /bin/bash. The updater compares the installed CLI with the
+latest GitHub Release first and exits without downloading release assets when the
+versions match. This is the same update flow documented for
 "curl -fsSL .../scripts/update-release.sh | bash". Run it as a normal user,
 not through sudo; the updater requests privilege only for files that require it.
 `,

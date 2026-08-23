@@ -13,6 +13,7 @@ install_command=${INSTALL:-/usr/bin/install}
 sudo_value=${SUDO-sudo}
 update_service_config=${UPDATE_SERVICE_CONFIG:-0}
 start_service=${START_SERVICE:-0}
+semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
 
 service_binary=/Library/PrivilegedHelperTools/cn.notfound945.tun-proxy
 service_config='/Library/Application Support/tun-proxy/config.yaml'
@@ -29,6 +30,7 @@ usage() {
 还会执行事务性的 "tun-proxy service upgrade"，不会再次执行 service install。
 默认保留用户配置和当前托管配置。升级前已就绪的服务会重启并验证新版本；
 原本未运行或未就绪的服务保持 stopped/unloaded，升级过程不会尝试启动。
+无参数更新会先比较当前 CLI 与 GitHub 最新 Release；版本相同时直接退出。
 
 可选环境变量:
   PREFIX=/usr/local
@@ -83,6 +85,37 @@ run_privileged() {
   fi
 }
 
+old_version=未安装
+current_tag=
+if [[ -x $target ]]; then
+  if old_version=$("$target" version 2>/dev/null); then
+    if [[ $old_version == "tun-proxy "* ]]; then
+      current_version=${old_version#tun-proxy }
+      current_version=${current_version%% *}
+      if [[ v$current_version =~ $semver_re ]]; then
+        current_tag=v$current_version
+      fi
+    fi
+  else
+    old_version=未知版本
+  fi
+fi
+printf '当前 CLI: %s\n' "$old_version"
+
+source_value=${1:-}
+if [[ -z $source_value ]]; then
+  require_command curl
+  latest_url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${repository}/releases/latest")
+  latest_url=${latest_url%/}
+  source_value=${latest_url##*/}
+  [[ $source_value =~ $semver_re ]] || fail "GitHub latest 返回了无效的 Release 版本: $source_value"
+  if [[ -n $current_tag && $current_tag == "$source_value" ]]; then
+    printf '已是最新版本: tun-proxy %s\n' "${source_value#v}"
+    exit 0
+  fi
+fi
+
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
@@ -106,12 +139,6 @@ if [[ -z $installer ]]; then
 fi
 [[ -f $installer && ! -L $installer ]] || fail "安装程序不是普通文件: $installer"
 
-old_version=未安装
-if [[ -x $target ]]; then
-  old_version=$("$target" version 2>/dev/null || printf '未知版本')
-fi
-
-printf '当前 CLI: %s\n' "$old_version"
 run_installer() {
   TUN_PROXY_REPOSITORY="$repository" \
   PREFIX="$prefix" \
@@ -124,11 +151,7 @@ run_installer() {
   PRINT_NEXT_STEPS=0 \
     /bin/bash "$installer" "$@"
 }
-if (( $# == 1 )); then
-  run_installer "$1"
-else
-  run_installer
-fi
+run_installer "$source_value"
 
 [[ -x $target ]] || fail "更新后找不到 tun-proxy: $target"
 new_version=$("$target" version)
