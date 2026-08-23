@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hailinpan/tun-proxy/internal/config"
+	"github.com/hailinpan/tun-proxy/internal/launchservice"
 )
 
 func TestCleanupCommandRejectsNonPositiveTimeout(t *testing.T) {
@@ -54,6 +55,21 @@ func TestClearFakeIPPersistenceUsesBothConfiguredPools(t *testing.T) {
 	for _, path := range removed {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("path %q still exists: %v", path, err)
+		}
+	}
+}
+
+func TestManagedCleanupPathsOnlyMatchesDefaultServiceState(t *testing.T) {
+	layout := launchservice.DefaultLayout()
+	if !managedCleanupPaths(layout.State, layout.Lock) {
+		t.Fatal("default managed cleanup paths were not recognized")
+	}
+	for _, paths := range [][2]string{
+		{layout.State + ".other", layout.Lock},
+		{layout.State, layout.Lock + ".other"},
+	} {
+		if managedCleanupPaths(paths[0], paths[1]) {
+			t.Fatalf("custom cleanup paths were treated as managed: %q %q", paths[0], paths[1])
 		}
 	}
 }

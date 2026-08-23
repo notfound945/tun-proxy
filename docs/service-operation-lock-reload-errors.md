@@ -10,6 +10,11 @@
 
 这些改动不改变 tun-proxy 的 root supervisor、非 root worker、事务化配置更新和系统状态恢复架构，主要解决多个管理进程并发、reload 结果误关联以及错误只能依靠字符串判断的问题。
 
+> 实施状态（2026-08-23）：第 2 节的跨进程 Service Operation Lock 已实现，包括独立锁路径、
+> 非阻塞 `flock`、完整命令事务覆盖、`sync-user-config`、managed cleanup 和真实子进程竞争测试。
+> operation holder 的 status 展示、第 3 节 Control Socket / 外部 Reload Request ID，以及第 4 节
+> 完整结构化错误仍按后续阶段实施。
+
 ### 1.1 当前实现
 
 当前 service 生命周期操作包括：
@@ -19,6 +24,7 @@ install
 start
 stop
 restart
+sync-user-config
 reload
 upgrade
 uninstall
@@ -33,9 +39,9 @@ internal/launchservice/manager.go
 
 当前存在以下限制。
 
-#### 生命周期操作没有跨进程串行化
+#### 生命周期操作原先没有跨进程串行化
 
-不同的 `sudo tun-proxy service ...` 命令运行在不同进程中，当前没有覆盖完整管理事务的 operation lock。
+第 2 节实施前，不同的 `sudo tun-proxy service ...` 命令运行在不同进程中，没有覆盖完整管理事务的 operation lock。当前实现已在命令/控制器边界统一获取独立 operation lock，并覆盖完整事务。
 
 `internal/daemon/lock_darwin.go` 中已有的锁是代理运行实例锁。该锁在代理整个运行期间持续持有，不能直接用于 service 生命周期操作，否则运行中的服务会阻止正常的 reload、stop、upgrade 等管理操作。
 
@@ -87,6 +93,7 @@ service install
 service start
 service stop
 service restart
+service sync-user-config
 service reload
 service upgrade
 service uninstall

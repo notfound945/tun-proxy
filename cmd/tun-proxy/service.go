@@ -23,7 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func serviceCommand(args []string) error {
+func serviceCommand(args []string) (resultErr error) {
 	if len(args) == 0 {
 		printServiceUsage()
 		return errors.New("a service command is required")
@@ -31,6 +31,15 @@ func serviceCommand(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, unix.SIGTERM)
 	defer stop()
 	manager := newServiceManager()
+	if kind, ok := serviceOperationKind(args[0]); ok && !hasOnlyHelpArgument(args[1:]) {
+		guard, err := manager.BeginOperation(ctx, launchservice.OperationSpec{Kind: kind})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			resultErr = errors.Join(resultErr, guard.Close())
+		}()
+	}
 	switch args[0] {
 	case "install":
 		return serviceInstallCommand(ctx, manager, args[1:])
@@ -67,6 +76,29 @@ func serviceCommand(args []string) error {
 	default:
 		printServiceUsage()
 		return fmt.Errorf("unknown service command %q", args[0])
+	}
+}
+
+func serviceOperationKind(command string) (launchservice.OperationKind, bool) {
+	switch command {
+	case "install":
+		return launchservice.OperationInstall, true
+	case "start":
+		return launchservice.OperationStart, true
+	case "stop":
+		return launchservice.OperationStop, true
+	case "restart":
+		return launchservice.OperationRestart, true
+	case "sync-user-config":
+		return launchservice.OperationSyncUserConfig, true
+	case "reload":
+		return launchservice.OperationReload, true
+	case "upgrade":
+		return launchservice.OperationUpgrade, true
+	case "uninstall":
+		return launchservice.OperationUninstall, true
+	default:
+		return "", false
 	}
 }
 

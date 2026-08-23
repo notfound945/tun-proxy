@@ -378,7 +378,7 @@ func newCleanupFlagSet(output io.Writer, options *cleanupOptions) *flag.FlagSet 
 	return flags
 }
 
-func cleanupCommand(args []string) error {
+func cleanupCommand(args []string) (resultErr error) {
 	options := cleanupOptions{}
 	flags := newCleanupFlagSet(os.Stderr, &options)
 	if err := flags.Parse(args); err != nil {
@@ -410,6 +410,15 @@ func cleanupCommand(args []string) error {
 	defer stop()
 	cleanupCtx, cancel := context.WithTimeout(signalCtx, options.timeout)
 	defer cancel()
+	if managedCleanupPaths(options.statePath, options.lockPath) {
+		guard, err := newServiceManager().BeginOperation(cleanupCtx, launchservice.OperationSpec{Kind: launchservice.OperationCleanup})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			resultErr = errors.Join(resultErr, guard.Close())
+		}()
+	}
 	if err := app.Cleanup(cleanupCtx, options.statePath, options.lockPath); err != nil {
 		return err
 	}
@@ -441,6 +450,11 @@ func cleanupCommand(args []string) error {
 	}
 	fmt.Println("cleanup complete")
 	return nil
+}
+
+func managedCleanupPaths(statePath, lockPath string) bool {
+	layout := launchservice.DefaultLayout()
+	return statePath == layout.State && lockPath == layout.Lock
 }
 
 func clearFakeIPPersistence(runtime *config.Config) ([]string, error) {

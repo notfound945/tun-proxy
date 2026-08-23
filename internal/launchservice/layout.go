@@ -17,44 +17,46 @@ import (
 const Label = "cn.notfound945.tun-proxy"
 
 type Layout struct {
-	Label        string
-	Binary       string
-	Config       string
-	Plist        string
-	LogDirectory string
-	StandardOut  string
-	StandardErr  string
-	RuntimeDir   string
-	WorkerUser   string
-	WorkerGroup  string
-	WorkerDir    string
-	StatusSocket string
-	DataDir      string
-	State        string
-	Lock         string
-	FakeIPv4     string
-	FakeIPv6     string
+	Label         string
+	Binary        string
+	Config        string
+	Plist         string
+	LogDirectory  string
+	StandardOut   string
+	StandardErr   string
+	RuntimeDir    string
+	WorkerUser    string
+	WorkerGroup   string
+	WorkerDir     string
+	StatusSocket  string
+	DataDir       string
+	State         string
+	Lock          string
+	OperationLock string
+	FakeIPv4      string
+	FakeIPv6      string
 }
 
 func DefaultLayout() Layout {
 	return Layout{
-		Label:        Label,
-		Binary:       "/Library/PrivilegedHelperTools/cn.notfound945.tun-proxy",
-		Config:       "/Library/Application Support/tun-proxy/config.yaml",
-		Plist:        "/Library/LaunchDaemons/cn.notfound945.tun-proxy.plist",
-		LogDirectory: "/Library/Logs/tun-proxy",
-		StandardOut:  "/Library/Logs/tun-proxy/stdout.log",
-		StandardErr:  "/Library/Logs/tun-proxy/stderr.log",
-		RuntimeDir:   "/var/run/tun-proxy",
-		WorkerUser:   "_tun-proxy",
-		WorkerGroup:  "_tun-proxy",
-		WorkerDir:    "/var/run/tun-proxy/worker",
-		StatusSocket: "/var/run/tun-proxy/worker/status.sock",
-		DataDir:      "/var/lib/tun-proxy",
-		State:        "/var/run/tun-proxy/state.json",
-		Lock:         "/var/run/tun-proxy/tun-proxy.lock",
-		FakeIPv4:     "/var/lib/tun-proxy/fake-ip.yaml",
-		FakeIPv6:     "/var/lib/tun-proxy/fake-ipv6.yaml",
+		Label:         Label,
+		Binary:        "/Library/PrivilegedHelperTools/cn.notfound945.tun-proxy",
+		Config:        "/Library/Application Support/tun-proxy/config.yaml",
+		Plist:         "/Library/LaunchDaemons/cn.notfound945.tun-proxy.plist",
+		LogDirectory:  "/Library/Logs/tun-proxy",
+		StandardOut:   "/Library/Logs/tun-proxy/stdout.log",
+		StandardErr:   "/Library/Logs/tun-proxy/stderr.log",
+		RuntimeDir:    "/var/run/tun-proxy",
+		WorkerUser:    "_tun-proxy",
+		WorkerGroup:   "_tun-proxy",
+		WorkerDir:     "/var/run/tun-proxy/worker",
+		StatusSocket:  "/var/run/tun-proxy/worker/status.sock",
+		DataDir:       "/var/lib/tun-proxy",
+		State:         "/var/run/tun-proxy/state.json",
+		Lock:          "/var/run/tun-proxy/tun-proxy.lock",
+		OperationLock: "/var/run/tun-proxy.service-operation.lock",
+		FakeIPv4:      "/var/lib/tun-proxy/fake-ip.yaml",
+		FakeIPv6:      "/var/lib/tun-proxy/fake-ipv6.yaml",
 	}
 }
 
@@ -74,7 +76,8 @@ func (layout Layout) Validate() error {
 		"stderr": layout.StandardErr, "runtime directory": layout.RuntimeDir,
 		"worker runtime directory": layout.WorkerDir, "status socket": layout.StatusSocket,
 		"data directory": layout.DataDir, "state": layout.State, "lock": layout.Lock,
-		"Fake IPv4 persistence": layout.FakeIPv4, "Fake IPv6 persistence": layout.FakeIPv6,
+		"service operation lock": layout.OperationLock,
+		"Fake IPv4 persistence":  layout.FakeIPv4, "Fake IPv6 persistence": layout.FakeIPv6,
 	} {
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 			return fmt.Errorf("service %s must be a clean absolute path: %q", name, path)

@@ -371,3 +371,38 @@ func TestManagedServiceProcessDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceOperationKindCoversEveryManagedMutation(t *testing.T) {
+	want := map[string]launchservice.OperationKind{
+		"install":          launchservice.OperationInstall,
+		"start":            launchservice.OperationStart,
+		"stop":             launchservice.OperationStop,
+		"restart":          launchservice.OperationRestart,
+		"sync-user-config": launchservice.OperationSyncUserConfig,
+		"reload":           launchservice.OperationReload,
+		"upgrade":          launchservice.OperationUpgrade,
+		"uninstall":        launchservice.OperationUninstall,
+	}
+	for command, wantKind := range want {
+		got, ok := serviceOperationKind(command)
+		if !ok || got != wantKind {
+			t.Errorf("serviceOperationKind(%q) = %q, %t; want %q, true", command, got, ok, wantKind)
+		}
+	}
+	for _, command := range []string{"status", "logs", "help", "unknown"} {
+		if got, ok := serviceOperationKind(command); ok {
+			t.Errorf("serviceOperationKind(%q) = %q, true; want no lock", command, got)
+		}
+	}
+}
+
+func TestServiceOperationHelpBypassPredicate(t *testing.T) {
+	for _, arg := range []string{"help", "-h", "--help"} {
+		if !hasOnlyHelpArgument([]string{arg}) {
+			t.Errorf("hasOnlyHelpArgument(%q) = false", arg)
+		}
+	}
+	if hasOnlyHelpArgument([]string{"-h", "extra"}) {
+		t.Fatal("help plus extra arguments unexpectedly bypassed operation validation")
+	}
+}

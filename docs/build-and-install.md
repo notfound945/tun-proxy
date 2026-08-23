@@ -363,6 +363,12 @@ sudo tun-proxy service logs -clear
 sudo tun-proxy service logs -clear -follow
 ```
 
+上述会修改托管服务或配置的命令通过 `/var/run/tun-proxy.service-operation.lock` 在不同 CLI
+进程之间互斥，并覆盖配置替换、运行时确认、提交或回滚的完整事务。另一个写操作正在执行时，
+新命令会立即提示 `service operation is already in progress`，而不会并发修改 launchd、配置或
+运行状态；持锁进程退出后内核会自动释放锁。`service status` 和 `service logs` 等只读命令不受
+该排他锁影响。
+
 `service stop` 会回滚运行期间的系统状态，禁用并卸载 launchd job，以阻止 `KeepAlive`
 再次拉起进程，但会保留安装；后续 `service start` 会重新启用并加载 job。`service reload`
 仅供运行中的服务热更新可重载配置；`service sync-user-config` 会同步完整用户配置，服务已运行时

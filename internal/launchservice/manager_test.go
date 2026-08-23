@@ -1267,7 +1267,8 @@ func testLayout(t *testing.T) Layout {
 		RuntimeDir: filepath.Join(root, "run"), WorkerUser: "_tun-proxy", WorkerGroup: "_tun-proxy",
 		WorkerDir: filepath.Join(root, "run", "worker"), StatusSocket: filepath.Join(root, "run", "worker", "status.sock"),
 		DataDir: filepath.Join(root, "lib"), State: filepath.Join(root, "run", "state.json"),
-		Lock: filepath.Join(root, "run", "lock"), FakeIPv4: filepath.Join(root, "lib", "fake-ip.yaml"),
+		Lock: filepath.Join(root, "run", "lock"), OperationLock: filepath.Join(root, "service-operation.lock"),
+		FakeIPv4: filepath.Join(root, "lib", "fake-ip.yaml"),
 		FakeIPv6: filepath.Join(root, "lib", "fake-ipv6.yaml"),
 	}
 }

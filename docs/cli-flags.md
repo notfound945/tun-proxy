@@ -311,6 +311,18 @@ sudo tun-proxy service install -start-at-boot=true
 不会配置开机自启。`-start-at-boot=true` 同时启用 launchd 的异常退出自动重启；默认关闭
 时不会写入隐式触发开机运行的 `KeepAlive`。
 
+### 托管服务操作互斥
+
+所有会修改托管服务或托管配置的命令——`install`、`start`、`stop`、`restart`、
+`sync-user-config`、`reload`、`upgrade` 和 `uninstall`——都会在完整事务期间持有独立的跨进程
+operation lock：`/var/run/tun-proxy.service-operation.lock`。使用默认托管 state/lock 路径的
+`cleanup` 也使用同一把锁；显式指定独立 state/lock 的 standalone cleanup 不会获取它。
+
+锁使用非阻塞 `flock`。已有其他写操作执行时，命令会立即返回“service operation is already in
+progress”，并在 metadata 可用时附带操作类型、operation ID、PID 和开始时间。`service status`、
+`service logs` 等只读命令不获取该排他锁。锁文件会保留，但只有实际持有的内核锁表示操作仍在
+进行；持锁进程退出或崩溃后内核会自动释放锁。
+
 ### `service start`
 
 ```sh

@@ -133,6 +133,9 @@ func TestDefaultLayoutDefinesDedicatedWorkerContract(t *testing.T) {
 	if layout.WorkerDir != "/var/run/tun-proxy/worker" || layout.StatusSocket != "/var/run/tun-proxy/worker/status.sock" {
 		t.Fatalf("worker runtime layout = dir=%q socket=%q", layout.WorkerDir, layout.StatusSocket)
 	}
+	if layout.OperationLock != "/var/run/tun-proxy.service-operation.lock" {
+		t.Fatalf("service operation lock = %q", layout.OperationLock)
+	}
 	if err := layout.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -155,6 +158,14 @@ func TestLayoutRejectsStatusSocketOutsideWorkerDirectory(t *testing.T) {
 	layout := testLayout(t)
 	layout.StatusSocket = filepath.Join(layout.RuntimeDir, "status.sock")
 	if err := layout.Validate(); err == nil || !strings.Contains(err.Error(), "worker runtime directory") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestLayoutRequiresOperationLockPath(t *testing.T) {
+	layout := testLayout(t)
+	layout.OperationLock = ""
+	if err := layout.Validate(); err == nil || !strings.Contains(err.Error(), "service operation lock") {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
