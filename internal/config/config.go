@@ -465,6 +465,9 @@ func compileFakeIP(raw rawFakeIP) (FakeIP, error) {
 	if err != nil {
 		return FakeIP{}, err
 	}
+	if dnsTTL < time.Second {
+		return FakeIP{}, errors.New("fake_ip.dns_ttl must be at least 1s because DNS TTLs are emitted in whole seconds")
+	}
 	mappingTTL, err := parsePositiveDuration("fake_ip.mapping_ttl", defaultString(raw.MappingTTL, "24h"))
 	if err != nil {
 		return FakeIP{}, err

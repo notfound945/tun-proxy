@@ -90,6 +90,10 @@ func serviceLogsCommand(ctx context.Context, layout launchservice.Layout, args [
 	for _, log := range logs {
 		contents, info, err := tailManagedLog(log.Path, options.lines)
 		if err != nil {
+			if options.follow && errors.Is(err, os.ErrNotExist) {
+				followers = append(followers, followedLog{managedLog: log})
+				continue
+			}
 			return err
 		}
 		if len(logs) > 1 {
@@ -106,7 +110,7 @@ func serviceLogsCommand(ctx context.Context, layout launchservice.Layout, args [
 	if !options.follow {
 		return nil
 	}
-	return followManagedLogs(ctx, followers)
+	return followManagedLogs(ctx, followers, os.Stdout)
 }
 
 func selectedManagedLogs(layout launchservice.Layout, stream string) ([]managedLog, error) {
@@ -281,12 +285,9 @@ func tailManagedLog(path string, lines int) ([]byte, os.FileInfo, error) {
 	if start < 0 {
 		start = 0
 	}
-	if _, err := file.Seek(start, io.SeekStart); err != nil {
-		return nil, nil, fmt.Errorf("seek managed log %q: %w", path, err)
-	}
-	contents, err := io.ReadAll(io.LimitReader(file, maxTailWindow))
+	contents, err := readManagedLogRange(file, path, start, info.Size())
 	if err != nil {
-		return nil, nil, fmt.Errorf("read managed log %q: %w", path, err)
+		return nil, nil, err
 	}
 	if start > 0 {
 		if newline := bytes.IndexByte(contents, '\n'); newline >= 0 {
@@ -295,6 +296,20 @@ func tailManagedLog(path string, lines int) ([]byte, os.FileInfo, error) {
 	}
 	contents = lastLines(contents, lines)
 	return contents, info, nil
+}
+
+func readManagedLogRange(file *os.File, path string, start, end int64) ([]byte, error) {
+	if start < 0 || end < start {
+		return nil, fmt.Errorf("invalid managed log range [%d,%d) for %q", start, end, path)
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek managed log %q: %w", path, err)
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, end-start))
+	if err != nil {
+		return nil, fmt.Errorf("read managed log %q: %w", path, err)
+	}
+	return contents, nil
 }
 
 func openManagedLog(path string) (*os.File, os.FileInfo, error) {
@@ -347,8 +362,12 @@ func lastLines(contents []byte, count int) []byte {
 	return contents[start:]
 }
 
-func followManagedLogs(ctx context.Context, logs []followedLog) error {
-	ticker := time.NewTicker(250 * time.Millisecond)
+func followManagedLogs(ctx context.Context, logs []followedLog, output io.Writer) error {
+	return followManagedLogsAtInterval(ctx, logs, output, 250*time.Millisecond)
+}
+
+func followManagedLogsAtInterval(ctx context.Context, logs []followedLog, output io.Writer, interval time.Duration) error {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -361,10 +380,13 @@ func followManagedLogs(ctx context.Context, logs []followedLog) error {
 			for index := range logs {
 				log := &logs[index]
 				file, info, err := openManagedLog(log.Path)
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
 				if err != nil {
 					return err
 				}
-				if !os.SameFile(log.Info, info) || info.Size() < log.Offset {
+				if log.Info == nil || !os.SameFile(log.Info, info) || info.Size() < log.Offset {
 					log.Offset = 0
 				}
 				if info.Size() == log.Offset {
@@ -372,21 +394,25 @@ func followManagedLogs(ctx context.Context, logs []followedLog) error {
 					_ = file.Close()
 					continue
 				}
-				if _, err := file.Seek(log.Offset, io.SeekStart); err != nil {
-					_ = file.Close()
-					return fmt.Errorf("seek managed log %q: %w", log.Path, err)
-				}
-				contents, err := io.ReadAll(file)
+				start := log.Offset
+				contents, err := readManagedLogRange(file, log.Path, start, info.Size())
 				_ = file.Close()
 				if err != nil {
-					return fmt.Errorf("follow managed log %q: %w", log.Path, err)
+					return err
+				}
+				log.Offset = start + int64(len(contents))
+				log.Info = info
+				if len(contents) == 0 {
+					continue
 				}
 				if len(logs) > 1 {
-					fmt.Printf("==> %s <==\n", log.Name)
+					if _, err := fmt.Fprintf(output, "==> %s <==\n", log.Name); err != nil {
+						return fmt.Errorf("write managed log header: %w", err)
+					}
 				}
-				_, _ = os.Stdout.Write(contents)
-				log.Offset = info.Size()
-				log.Info = info
+				if _, err := output.Write(contents); err != nil {
+					return fmt.Errorf("write managed log %q: %w", log.Path, err)
+				}
 			}
 		}
 	}

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hailinpan/tun-proxy/internal/launchservice"
 )
@@ -30,6 +32,108 @@ func TestLastLines(t *testing.T) {
 				t.Fatalf("lastLines() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+type managedLogTestWriter chan string
+
+func (writer managedLogTestWriter) Write(contents []byte) (int, error) {
+	writer <- string(append([]byte(nil), contents...))
+	return len(contents), nil
+}
+
+func TestServiceLogsClearFollowAcceptsMissingFile(t *testing.T) {
+	directory := t.TempDir()
+	layout := launchservice.Layout{StandardOut: filepath.Join(directory, "stdout.log")}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := serviceLogsCommand(ctx, layout, []string{"-clear", "-follow", "-stream", "stdout"}); err != nil {
+		t.Fatalf("serviceLogsCommand() error = %v", err)
+	}
+}
+
+func TestFollowManagedLogsWaitsForMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stdout.log")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	writes := make(managedLogTestWriter, 1)
+	errors := make(chan error, 1)
+	go func() {
+		errors <- followManagedLogsAtInterval(ctx, []followedLog{{managedLog: managedLog{Name: "stdout", Path: path}}}, writes, 5*time.Millisecond)
+	}()
+
+	select {
+	case err := <-errors:
+		t.Fatalf("followManagedLogsAtInterval() exited while log was absent: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	if err := os.WriteFile(path, []byte("created after follow\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-writes:
+		if got != "created after follow\n" {
+			t.Fatalf("followed contents = %q", got)
+		}
+	case err := <-errors:
+		t.Fatalf("followManagedLogsAtInterval() error = %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("follow mode did not read a log created after startup")
+	}
+
+	cancel()
+	select {
+	case err := <-errors:
+		if err != nil {
+			t.Fatalf("followManagedLogsAtInterval() cancellation error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follow mode did not stop after cancellation")
+	}
+}
+
+func TestReadManagedLogRangeStopsAtCapturedSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stdout.log")
+	initial := []byte("before snapshot\n")
+	appended := []byte("after snapshot\n")
+	if err := os.WriteFile(path, initial, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, info, err := openManagedLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close() //nolint:errcheck // Test cleanup.
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appendFile.Write(appended); err != nil {
+		_ = appendFile.Close()
+		t.Fatal(err)
+	}
+	if err := appendFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	contents, err := readManagedLogRange(file, path, 0, info.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != string(initial) {
+		t.Fatalf("snapshot contents = %q, want %q", contents, initial)
+	}
+	current, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err = readManagedLogRange(file, path, info.Size(), current.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != string(appended) {
+		t.Fatalf("next snapshot contents = %q, want %q", contents, appended)
 	}
 }
 

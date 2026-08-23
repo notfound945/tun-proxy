@@ -300,6 +300,7 @@ func TestDecodeRejectsInvalidConfig(t *testing.T) {
 		{name: "unsupported version", yaml: strings.Replace(validYAML, "version: 1", "version: 2", 1), wantErr: "version must be 1"},
 		{name: "rollback disabled", yaml: strings.Replace(validYAML, "restore_on_exit: true", "restore_on_exit: false", 1), wantErr: "host network rollback is mandatory"},
 		{name: "bad duration", yaml: strings.Replace(validYAML, "dns_ttl: 1m", "dns_ttl: soon", 1), wantErr: "positive duration"},
+		{name: "subsecond DNS TTL", yaml: strings.Replace(validYAML, "dns_ttl: 1m", "dns_ttl: 500ms", 1), wantErr: "dns_ttl must be at least 1s"},
 		{name: "bad UDP idle timeout", yaml: strings.Replace(validYAML, "udp_idle_timeout: 30s", "udp_idle_timeout: never", 1), wantErr: "sessions.udp_idle_timeout"},
 		{name: "bad TCP limit", yaml: strings.Replace(validYAML, "sessions:\n", "sessions:\n  max_tcp_flows: -1\n", 1), wantErr: "sessions.max_tcp_flows"},
 		{name: "bad DNS limit", yaml: strings.Replace(validYAML, "default_outbound: primary", "default_outbound: primary\n  max_concurrent: 70000", 1), wantErr: "dns.max_concurrent"},

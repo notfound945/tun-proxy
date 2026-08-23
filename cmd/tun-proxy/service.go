@@ -260,15 +260,7 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		).WithDetails(map[string]any{"socket_path": state.ControlSocket})
 	}
 
-	var configUpdate *launchservice.ConfigUpdate
-	if configContents != nil {
-		configUpdate, err = manager.BeginConfigUpdate(configContents)
-		if err != nil {
-			return fmt.Errorf("synchronize managed configuration: %w", err)
-		}
-	}
-
-	request, err := newServiceReloadRequest(ctx, expectedDigest, "")
+	request, configUpdate, err := prepareServiceReload(ctx, manager, configContents, expectedDigest, newServiceReloadRequest)
 	if err != nil {
 		return err
 	}
@@ -328,6 +320,32 @@ func resolveServiceReloadConfigPath(options serviceReloadOptions) (string, error
 type serviceOperationIDContextKey struct{}
 
 type serviceControlReload func(context.Context, string, uint32, control.ReloadRequest) (control.ReloadResponse, error)
+type serviceReloadRequestFactory func(context.Context, string, string) (control.ReloadRequest, error)
+
+type serviceConfigUpdateBeginner interface {
+	BeginConfigUpdate([]byte) (*launchservice.ConfigUpdate, error)
+}
+
+func prepareServiceReload(
+	ctx context.Context,
+	updater serviceConfigUpdateBeginner,
+	configContents []byte,
+	expectedDigest string,
+	newRequest serviceReloadRequestFactory,
+) (control.ReloadRequest, *launchservice.ConfigUpdate, error) {
+	request, err := newRequest(ctx, expectedDigest, "")
+	if err != nil {
+		return control.ReloadRequest{}, nil, err
+	}
+	if configContents == nil {
+		return request, nil, nil
+	}
+	configUpdate, err := updater.BeginConfigUpdate(configContents)
+	if err != nil {
+		return control.ReloadRequest{}, nil, fmt.Errorf("synchronize managed configuration: %w", err)
+	}
+	return request, configUpdate, nil
+}
 
 func newServiceReloadRequest(ctx context.Context, expectedDigest, rollbackOf string) (control.ReloadRequest, error) {
 	operationID, _ := ctx.Value(serviceOperationIDContextKey{}).(string)

@@ -338,6 +338,38 @@ func TestRollbackServiceReloadUsesRestoredDigestAndControlResponse(t *testing.T)
 	}
 }
 
+type recordingConfigUpdateBeginner struct {
+	called bool
+}
+
+func (beginner *recordingConfigUpdateBeginner) BeginConfigUpdate([]byte) (*launchservice.ConfigUpdate, error) {
+	beginner.called = true
+	return &launchservice.ConfigUpdate{}, nil
+}
+
+func TestPrepareServiceReloadRequestFailureDoesNotActivateConfig(t *testing.T) {
+	want := errors.New("request ID source unavailable")
+	beginner := &recordingConfigUpdateBeginner{}
+	request, update, err := prepareServiceReload(
+		t.Context(),
+		beginner,
+		[]byte("replacement config"),
+		testServiceReloadDigest,
+		func(context.Context, string, string) (control.ReloadRequest, error) {
+			return control.ReloadRequest{}, want
+		},
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("prepareServiceReload() error = %v, want %v", err, want)
+	}
+	if beginner.called {
+		t.Fatal("prepareServiceReload() activated the configuration before constructing the request")
+	}
+	if request != (control.ReloadRequest{}) || update != nil {
+		t.Fatalf("prepareServiceReload() request=%+v update=%v after request failure", request, update)
+	}
+}
+
 func TestNewServiceReloadRequestUsesLockedOperationID(t *testing.T) {
 	ctx := context.WithValue(t.Context(), serviceOperationIDContextKey{}, testServiceOperationID)
 	request, err := newServiceReloadRequest(ctx, testServiceReloadDigest, testServiceReloadRequestID)

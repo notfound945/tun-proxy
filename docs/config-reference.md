@@ -351,7 +351,7 @@ fake_ip:
 | 字段 | 类型 | 默认值 | 热重载 | 约束与说明 |
 | --- | --- | --- | --- | --- |
 | `fake_ip.cidr` | CIDR string | `198.18.0.0/15` | 否 | IPv4 Fake IP 地址池。输入会规范化为网络前缀。 |
-| `fake_ip.dns_ttl` | duration | `1m` | 是 | Fake A/AAAA DNS 答案的 TTL，必须大于零。实际 DNS 秒值最小为 1 秒。 |
+| `fake_ip.dns_ttl` | duration | `1m` | 是 | Fake A/AAAA DNS 答案的 TTL，必须至少为 1 秒；DNS TTL 以整秒发送。 |
 | `fake_ip.mapping_ttl` | duration | `24h` | 否 | 域名与 Fake IP 映射的保留时间，必须大于 `dns_ttl`。IPv4/IPv6 池共享该值。 |
 | `fake_ip.max_mappings` | integer | `65536` | 否 | IPv4 最大映射数，范围为 `1` 到地址池可用容量。池较小时默认值会自动下调。 |
 | `fake_ip.persistence_file` | string | `/var/lib/tun-proxy/fake-ip.yaml` | 否 | IPv4 映射持久化文件，必须是 clean absolute path。WAL 使用关联路径。 |
