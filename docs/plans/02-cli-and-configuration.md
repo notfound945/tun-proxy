@@ -235,8 +235,10 @@ sudo tun-proxy service sync-user-config
 
 服务运行时，托管 reload 会先校验并事务性安装配置，再通过 root-only
 `/var/run/tun-proxy/control.sock` 发送期望配置摘要，等待 supervisor/worker 的最终结果。CLI 不再
-通过 status counters 推断请求结果；运行时拒绝、摘要不一致或超时会回滚已安装配置，并通过同一
-control socket 确认旧运行配置恢复。`SIGHUP` 仅保留为手工兼容入口。reload 成功后只影响新建
+通过 status counters 推断请求结果。每次 apply 使用独立的 128-bit reload request ID；control 断线时
+使用同一 ID 安全重试并恢复缓存结果。运行时拒绝、摘要不一致或超时会回滚已安装配置，rollback
+使用新的 request ID、相同 operation ID 和 `rollback_of`，并通过同一 control socket 确认旧运行
+配置恢复。`SIGHUP` 仅保留为会自动生成关联 ID 的手工兼容入口。reload 成功后只影响新建
 DNS 查询和 TCP/UDP 流，已有流保留其原 generation、规则决定和出口。`service reload` 无论
 是否带配置参数都要求服务处于 `running` 阶段。
 

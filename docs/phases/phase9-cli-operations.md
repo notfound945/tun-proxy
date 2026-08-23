@@ -139,9 +139,12 @@ stopped; a running service is stopped and restarted with readiness checking,
 and startup failure rolls the configuration back before attempting to restore
 the previous service. Reload is reserved for a running service: the CLI sends
 the expected managed-config digest over the root-only supervisor control socket
-and waits for the worker's final result. The status counters remain observable
-but are no longer used to associate the CLI request; `SIGHUP` is only a manual
-compatibility entry point. Immutable changes return the runtime rejection
+and waits for the worker's final result. Each apply uses a 128-bit external
+reload request ID; transport retries reuse that ID and recover the supervisor's
+bounded cached result. Rollback uses a new request ID with the same operation ID
+and `rollback_of`. The status counters remain observable but are no longer used
+to associate the CLI request; `SIGHUP` is only a manual compatibility entry point
+and generates its own correlation IDs. Immutable changes return the runtime rejection
 without replacing the active generation.
 
 Logs are limited to the fixed managed stdout/stderr paths. The reader rejects

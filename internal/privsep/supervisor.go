@@ -161,6 +161,12 @@ func (session *SupervisorSession) Reload(ctx context.Context, payload Reload) er
 	if err != nil {
 		return err
 	}
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	if result.ReloadRequestID != payload.ReloadRequestID {
+		return fmt.Errorf("worker reload request ID=%q, want %q", result.ReloadRequestID, payload.ReloadRequestID)
+	}
 	if result.Error != "" {
 		return errors.New(result.Error)
 	}

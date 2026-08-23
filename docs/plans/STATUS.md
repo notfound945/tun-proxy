@@ -1,6 +1,6 @@
 # tun-proxy current status
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 This document records the current implementation status, acceptance evidence,
 and remaining release work. Detailed procedures and chronological evidence live
@@ -64,8 +64,10 @@ synchronization is separate from hot reload: `service sync-user-config` keeps a
 stopped service stopped or restarts a running service with rollback, while
 `service reload` remains available only to a running service. Managed reload now
 uses the root-only `/var/run/tun-proxy/control.sock`, sends an expected config
-digest, and waits for the final supervisor/worker result; SIGHUP remains only as
-a manual compatibility entry point.
+digest plus a 128-bit external reload request ID, and waits for the final
+supervisor/worker result. Transport retries reuse the same ID and recover a
+bounded cached result; rollback uses a new ID with `rollback_of`. SIGHUP remains
+a manual compatibility entry point and generates its own correlation IDs.
 
 The one-off Phase 0, 2, 3, 8.6, and 8.7b spike commands were removed after
 production implementation and acceptance. Their historical evidence remains

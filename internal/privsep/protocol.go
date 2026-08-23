@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	ProtocolVersion  = 1
+	ProtocolVersion  = 2
 	MaxConfigSize    = 1 << 20
 	maxFrameSize     = 2 << 20
 	maxDNSInterfaces = 32
@@ -115,13 +115,17 @@ type Running struct {
 }
 
 type Reload struct {
-	Config       []byte                      `json:"config"`
-	ConfigDigest string                      `json:"config_digest"`
-	InterfaceDNS map[string][]netip.AddrPort `json:"interface_dns,omitempty"`
+	ReloadRequestID string                      `json:"reload_request_id"`
+	Config          []byte                      `json:"config"`
+	ConfigDigest    string                      `json:"config_digest"`
+	InterfaceDNS    map[string][]netip.AddrPort `json:"interface_dns,omitempty"`
 }
 
 func (reload Reload) Validate() error {
 	var failures []error
+	if err := validateExternalRequestID(reload.ReloadRequestID); err != nil {
+		failures = append(failures, err)
+	}
 	if len(reload.Config) == 0 {
 		failures = append(failures, errors.New("reload config is empty"))
 	} else if len(reload.Config) > MaxConfigSize {
@@ -175,8 +179,28 @@ func validateInterfaceDNS(configured map[string][]netip.AddrPort) error {
 }
 
 type ReloadResult struct {
-	ConfigDigest string `json:"config_digest,omitempty"`
-	Error        string `json:"error,omitempty"`
+	ReloadRequestID string `json:"reload_request_id"`
+	ConfigDigest    string `json:"config_digest,omitempty"`
+	ErrorCode       string `json:"error_code,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+func (result ReloadResult) Validate() error {
+	var failures []error
+	if err := validateExternalRequestID(result.ReloadRequestID); err != nil {
+		failures = append(failures, err)
+	}
+	if result.Error == "" {
+		if err := validateDigest(result.ConfigDigest); err != nil {
+			failures = append(failures, err)
+		}
+		if result.ErrorCode != "" {
+			failures = append(failures, errors.New("successful reload result must not include an error code"))
+		}
+	} else if result.ConfigDigest != "" {
+		failures = append(failures, errors.New("failed reload result must not include a config digest"))
+	}
+	return errors.Join(failures...)
 }
 
 type Shutdown struct {
@@ -308,6 +332,16 @@ func ReceiveKind[T any](codec *Codec, want Kind) (T, uint64, error) {
 	}
 	payload, err := DecodePayload[T](message)
 	return payload, message.RequestID, err
+}
+
+func validateExternalRequestID(requestID string) error {
+	if len(requestID) != 32 || requestID != strings.ToLower(requestID) {
+		return fmt.Errorf("reload request ID must be 32 lowercase hex characters, got %q", requestID)
+	}
+	if _, err := hex.DecodeString(requestID); err != nil {
+		return fmt.Errorf("reload request ID is invalid: %w", err)
+	}
+	return nil
 }
 
 func validateDigest(digest string) error {

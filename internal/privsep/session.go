@@ -124,7 +124,7 @@ func ServeWorker(ctx context.Context, control io.ReadWriter, runtime WorkerRunti
 				if decodeErr == nil {
 					decodeErr = runtime.Reload(ctx, reload)
 				}
-				result := ReloadResult{ConfigDigest: reload.ConfigDigest}
+				result := ReloadResult{ReloadRequestID: reload.ReloadRequestID, ConfigDigest: reload.ConfigDigest}
 				if decodeErr != nil {
 					result.ConfigDigest = ""
 					result.Error = decodeErr.Error()

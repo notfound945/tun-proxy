@@ -35,6 +35,9 @@ type ServiceSupervisorOptions struct {
 
 type supervisorReloadRequest struct {
 	context        context.Context
+	requestID      string
+	operationID    string
+	rollbackOf     string
 	expectedDigest string
 	reply          chan supervisorReloadResult
 }
@@ -315,9 +318,12 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 	}
 	workerRunning = true
 	reloadRequests := make(chan supervisorReloadRequest)
-	controlServer, err = control.Start(layout.ControlSocket, 0, func(requestCtx context.Context, expectedDigest string) (string, error) {
+	controlServer, err = control.Start(layout.ControlSocket, 0, func(requestCtx context.Context, controlRequest control.ReloadRequest) (string, error) {
 		reply := make(chan supervisorReloadResult)
-		request := supervisorReloadRequest{context: requestCtx, expectedDigest: expectedDigest, reply: reply}
+		request := supervisorReloadRequest{
+			context: requestCtx, requestID: controlRequest.RequestID, operationID: controlRequest.OperationID,
+			rollbackOf: controlRequest.RollbackOf, expectedDigest: controlRequest.ExpectedConfigDigest, reply: reply,
+		}
 		select {
 		case reloadRequests <- request:
 		case <-requestCtx.Done():
@@ -346,10 +352,10 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 	defer networkTicker.Stop()
 	networkState := newNetworkRefreshState(networkFingerprint(effectiveRuntime))
 
-	performReload := func(requestCtx context.Context, expectedDigest string) supervisorReloadResult {
+	performReload := func(requestCtx context.Context, request supervisorReloadRequest) supervisorReloadResult {
 		nextBytes, next, nextDigest, reloadErr := loadManagedServiceConfig(configPath, layout)
 		if reloadErr == nil {
-			reloadErr = validateExpectedReloadDigest(nextDigest, expectedDigest)
+			reloadErr = validateExpectedReloadDigest(nextDigest, request.expectedDigest)
 		}
 		if reloadErr == nil {
 			reloadErr = PreflightReload(requestCtx, runtime, next)
@@ -369,7 +375,8 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 		if reloadErr == nil {
 			reloadCtx, cancel := context.WithTimeout(requestCtx, serviceSupervisorTimeout)
 			reloadErr = session.Reload(reloadCtx, privsep.Reload{
-				Config: nextBytes, ConfigDigest: nextDigest, InterfaceDNS: nextInterfaceServers,
+				ReloadRequestID: request.requestID, Config: nextBytes,
+				ConfigDigest: nextDigest, InterfaceDNS: nextInterfaceServers,
 			})
 			cancel()
 		}
@@ -392,7 +399,10 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 			emitServiceSupervisorEvent(options, "info", message)
 		}
 		networkState.reset(networkFingerprint(effectiveRuntime))
-		emitServiceSupervisorEvent(options, "info", "configuration reloaded")
+		emitServiceSupervisorEvent(options, "info", fmt.Sprintf(
+			"configuration reloaded request_id=%s operation_id=%s rollback_of=%s config_digest=%s",
+			request.requestID, request.operationID, request.rollbackOf, nextDigest,
+		))
 		return supervisorReloadResult{digest: nextDigest}
 	}
 
@@ -408,21 +418,32 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 			workerRunning = false
 			return finish(fmt.Errorf("service worker exited: %w", exitErr))
 		case request := <-reloadRequests:
-			result := performReload(request.context, request.expectedDigest)
+			result := performReload(request.context, request)
 			select {
 			case request.reply <- result:
 			case <-request.context.Done():
 			}
 			if result.err != nil {
-				emitServiceSupervisorEvent(options, "warn", "configuration reload rejected: "+result.err.Error())
+				emitServiceSupervisorEvent(options, "warn", fmt.Sprintf(
+					"configuration reload rejected request_id=%s operation_id=%s rollback_of=%s: %v",
+					request.requestID, request.operationID, request.rollbackOf, result.err,
+				))
 			}
 			if result.fatal {
 				return finish(result.err)
 			}
 		case <-options.Reload:
-			result := performReload(ctx, "")
+			request, requestErr := newSupervisorReloadRequest(ctx, "")
+			if requestErr != nil {
+				emitServiceSupervisorEvent(options, "warn", "generate SIGHUP reload request ID: "+requestErr.Error())
+				continue
+			}
+			result := performReload(ctx, request)
 			if result.err != nil {
-				emitServiceSupervisorEvent(options, "warn", "configuration reload rejected: "+result.err.Error())
+				emitServiceSupervisorEvent(options, "warn", fmt.Sprintf(
+					"configuration reload rejected request_id=%s operation_id=%s source=sighup: %v",
+					request.requestID, request.operationID, result.err,
+				))
 			}
 			if result.fatal {
 				return finish(result.err)
@@ -449,9 +470,16 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 			}
 			dnsChanged := !sameInterfaceDNS(interfaceServers, nextInterfaceServers)
 			if dnsChanged {
+				requestID, requestErr := control.NewRequestID()
+				if requestErr != nil {
+					if networkState.failed(requestErr) {
+						emitServiceSupervisorEvent(options, "warn", "generate worker DNS refresh request ID: "+requestErr.Error())
+					}
+					continue
+				}
 				reloadCtx, cancel := context.WithTimeout(ctx, serviceSupervisorTimeout)
 				err = session.Reload(reloadCtx, privsep.Reload{
-					Config: configBytes, ConfigDigest: digest, InterfaceDNS: nextInterfaceServers,
+					ReloadRequestID: requestID, Config: configBytes, ConfigDigest: digest, InterfaceDNS: nextInterfaceServers,
 				})
 				cancel()
 				if err != nil {
@@ -470,6 +498,20 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 			networkState.succeeded(fingerprint)
 		}
 	}
+}
+
+func newSupervisorReloadRequest(ctx context.Context, expectedDigest string) (supervisorReloadRequest, error) {
+	requestID, err := control.NewRequestID()
+	if err != nil {
+		return supervisorReloadRequest{}, err
+	}
+	operationID, err := control.NewRequestID()
+	if err != nil {
+		return supervisorReloadRequest{}, err
+	}
+	return supervisorReloadRequest{
+		context: ctx, requestID: requestID, operationID: operationID, expectedDigest: expectedDigest,
+	}, nil
 }
 
 func validateExpectedReloadDigest(actual, expected string) error {

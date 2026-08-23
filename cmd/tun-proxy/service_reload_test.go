@@ -16,7 +16,19 @@ import (
 	"github.com/hailinpan/tun-proxy/internal/privsep"
 )
 
+const (
+	testServiceReloadRequestID = "0123456789abcdef0123456789abcdef"
+	testServiceOperationID     = "fedcba9876543210fedcba9876543210"
+)
+
 const testServiceReloadDigest = "sha256:09bfcc6a14b83e2192b8673677725c84883ee9cd0c70e45c9ec09daa8f2b2847"
+
+func testServiceReloadRequest() control.ReloadRequest {
+	return control.ReloadRequest{
+		Version: control.Version, Kind: control.KindReload, RequestID: testServiceReloadRequestID,
+		OperationID: testServiceOperationID, ExpectedConfigDigest: testServiceReloadDigest,
+	}
+}
 
 func TestValidateServiceReloadStatusGuidesStoppedServiceToStart(t *testing.T) {
 	err := validateServiceReloadStatus(launchservice.Status{
@@ -60,16 +72,20 @@ func TestValidateServiceReloadStatusRejectsRunningServiceBeforeReady(t *testing.
 
 func TestRequestServiceReloadUsesFinalControlResponse(t *testing.T) {
 	called := false
-	response, err := requestServiceReload(t.Context(), "/tmp/control.sock", 42, testServiceReloadDigest, time.Second,
-		func(ctx context.Context, socket string, uid uint32, digest string) (control.ReloadResponse, error) {
+	request := testServiceReloadRequest()
+	response, err := requestServiceReload(t.Context(), "/tmp/control.sock", 42, request, time.Second,
+		func(ctx context.Context, socket string, uid uint32, got control.ReloadRequest) (control.ReloadResponse, error) {
 			called = true
-			if socket != "/tmp/control.sock" || uid != 42 || digest != testServiceReloadDigest {
-				t.Fatalf("control request socket=%q uid=%d digest=%q", socket, uid, digest)
+			if socket != "/tmp/control.sock" || uid != 42 || got != request {
+				t.Fatalf("control request socket=%q uid=%d request=%+v", socket, uid, got)
 			}
 			if _, ok := ctx.Deadline(); !ok {
 				t.Fatal("control request context has no timeout")
 			}
-			return control.ReloadResponse{Version: control.Version, Kind: control.KindReload, ConfigDigest: digest}, nil
+			return control.ReloadResponse{
+				Version: control.Version, Kind: control.KindReloadResult, RequestID: got.RequestID,
+				Result: control.ResultSucceeded, ConfigDigest: got.ExpectedConfigDigest,
+			}, nil
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -79,11 +95,37 @@ func TestRequestServiceReloadUsesFinalControlResponse(t *testing.T) {
 	}
 }
 
+func TestRequestServiceReloadRetriesTransportAndRunningWithSameID(t *testing.T) {
+	request := testServiceReloadRequest()
+	attempt := 0
+	response, err := requestServiceReload(t.Context(), "/tmp/control.sock", 42, request, time.Second,
+		func(_ context.Context, _ string, _ uint32, got control.ReloadRequest) (control.ReloadResponse, error) {
+			attempt++
+			if got != request {
+				t.Fatalf("attempt %d request=%+v, want %+v", attempt, got, request)
+			}
+			switch attempt {
+			case 1:
+				return control.ReloadResponse{}, &control.TransportError{Err: errors.New("response lost")}
+			case 2:
+				return control.ReloadResponse{Version: control.Version, Kind: control.KindReloadResult, RequestID: got.RequestID, Result: control.ResultRunning}, nil
+			default:
+				return control.ReloadResponse{Version: control.Version, Kind: control.KindReloadResult, RequestID: got.RequestID, Result: control.ResultSucceeded, ConfigDigest: got.ExpectedConfigDigest}, nil
+			}
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt != 3 || response.RequestID != request.RequestID {
+		t.Fatalf("attempts=%d response=%+v", attempt, response)
+	}
+}
+
 func TestRequestServiceReloadReturnsWorkerFailureDirectly(t *testing.T) {
 	want := errors.New("worker rejected immutable setting")
-	_, err := requestServiceReload(t.Context(), "/tmp/control.sock", 0, testServiceReloadDigest, time.Second,
-		func(context.Context, string, uint32, string) (control.ReloadResponse, error) {
-			return control.ReloadResponse{Version: control.Version, Kind: control.KindReload, Error: want.Error()}, want
+	_, err := requestServiceReload(t.Context(), "/tmp/control.sock", 0, testServiceReloadRequest(), time.Second,
+		func(context.Context, string, uint32, control.ReloadRequest) (control.ReloadResponse, error) {
+			return control.ReloadResponse{Result: control.ResultFailed, Error: want.Error()}, want
 		})
 	if err == nil || !strings.Contains(err.Error(), want.Error()) {
 		t.Fatalf("requestServiceReload() error = %v", err)
@@ -92,8 +134,8 @@ func TestRequestServiceReloadReturnsWorkerFailureDirectly(t *testing.T) {
 
 func TestRequestServiceReloadHonorsTimeoutWithoutStatusPolling(t *testing.T) {
 	started := time.Now()
-	_, err := requestServiceReload(t.Context(), "/tmp/control.sock", 0, testServiceReloadDigest, 20*time.Millisecond,
-		func(ctx context.Context, _ string, _ uint32, _ string) (control.ReloadResponse, error) {
+	_, err := requestServiceReload(t.Context(), "/tmp/control.sock", 0, testServiceReloadRequest(), 20*time.Millisecond,
+		func(ctx context.Context, _ string, _ uint32, _ control.ReloadRequest) (control.ReloadResponse, error) {
 			<-ctx.Done()
 			return control.ReloadResponse{}, ctx.Err()
 		})
@@ -250,20 +292,34 @@ func TestRollbackServiceReloadUsesRestoredDigestAndControlResponse(t *testing.T)
 		t.Fatal(err)
 	}
 	called := false
-	reload := func(_ context.Context, socket string, uid uint32, digest string) (control.ReloadResponse, error) {
+	reload := func(_ context.Context, socket string, uid uint32, request control.ReloadRequest) (control.ReloadResponse, error) {
 		called = true
-		if socket != "/tmp/control.sock" || uid != 42 || digest != wantDigest {
-			t.Fatalf("control rollback socket=%q uid=%d digest=%q, want digest=%q", socket, uid, digest, wantDigest)
+		if socket != "/tmp/control.sock" || uid != 42 || request.ExpectedConfigDigest != wantDigest {
+			t.Fatalf("control rollback socket=%q uid=%d request=%+v, want digest=%q", socket, uid, request, wantDigest)
 		}
-		return control.ReloadResponse{Version: control.Version, Kind: control.KindReload, ConfigDigest: digest}, nil
+		if request.OperationID != testServiceOperationID || request.RollbackOf != testServiceReloadRequestID || request.RequestID == request.RollbackOf {
+			t.Fatalf("rollback request IDs = %+v", request)
+		}
+		return control.ReloadResponse{Version: control.Version, Kind: control.KindReloadResult, RequestID: request.RequestID, Result: control.ResultSucceeded, ConfigDigest: request.ExpectedConfigDigest}, nil
 	}
 	update := testServiceConfigRollback{rollback: func() error {
 		return os.WriteFile(managedConfig, contents, 0o600)
 	}}
-	if err := rollbackServiceReloadConfig(manager, update, "/tmp/control.sock", time.Second, reload); err != nil {
+	if err := rollbackServiceReloadConfig(t.Context(), manager, update, "/tmp/control.sock", time.Second, testServiceOperationID, testServiceReloadRequestID, reload); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
 		t.Fatal("control rollback was not requested")
+	}
+}
+
+func TestNewServiceReloadRequestUsesLockedOperationID(t *testing.T) {
+	ctx := context.WithValue(t.Context(), serviceOperationIDContextKey{}, testServiceOperationID)
+	request, err := newServiceReloadRequest(ctx, testServiceReloadDigest, testServiceReloadRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.OperationID != testServiceOperationID || request.RollbackOf != testServiceReloadRequestID || request.RequestID == request.RollbackOf || len(request.RequestID) != 32 {
+		t.Fatalf("request = %+v", request)
 	}
 }

@@ -81,7 +81,7 @@ func TestServeWorkerStartupReloadAndShutdown(t *testing.T) {
 
 	reloadConfig := []byte("version: 2\n")
 	reloadDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(reloadConfig))
-	if err := codec.Send(KindReload, 7, Reload{Config: reloadConfig, ConfigDigest: reloadDigest}); err != nil {
+	if err := codec.Send(KindReload, 7, Reload{ReloadRequestID: testReloadRequestID, Config: reloadConfig, ConfigDigest: reloadDigest}); err != nil {
 		t.Fatal(err)
 	}
 	reloadResult, requestID, err := ReceiveKind[ReloadResult](codec, KindReloadResult)

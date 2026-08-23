@@ -352,8 +352,10 @@ sudo tun-proxy service reload \
 同步目标固定为 `/Library/Application Support/tun-proxy/config.yaml`。`service reload` 始终
 只适用于正在运行的服务，并且会拒绝不可热重载的修改。CLI 会计算托管配置摘要，通过仅允许
 root 访问的 `/var/run/tun-proxy/control.sock` 请求 supervisor reload，并等待 worker 的最终成功或
-失败结果；不再通过 status 计数器推断当前请求。运行时拒绝、超时或配置摘要不一致时，会回滚
-托管配置，并通过同一 control socket 确认原有运行配置已经恢复。`SIGHUP` 仅保留为手工兼容入口。
+失败结果；不再通过 status 计数器推断当前请求。每次 apply 使用独立的 128-bit reload request ID，
+control 断线时会以同一 ID 安全重试并恢复缓存结果。运行时拒绝、超时或配置摘要不一致时，会回滚
+托管配置；rollback 使用新的 request ID、相同 operation ID 和 `rollback_of`，再通过同一 control
+socket 确认原有运行配置已经恢复。`SIGHUP` 仅保留为会自动生成关联 ID 的手工兼容入口。
 启动失败后需要修正错误网口等完整配置时，应使用 `service sync-user-config`，然后在服务仍停止时
 执行 `sudo tun-proxy service start`。
 

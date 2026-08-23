@@ -314,7 +314,12 @@ func (worker *ServiceWorker) Reload(ctx context.Context, reload privsep.Reload) 
 		worker.digest = digest
 		configureLogging(next.Log)
 	}
-	worker.monitor.reloadResult(time.Now().UTC(), worker.digest, next, err)
+	worker.monitor.reloadResult(time.Now().UTC(), reload.ReloadRequestID, worker.digest, next, err)
+	if err != nil {
+		slog.Warn("worker configuration reload rejected", "request_id", reload.ReloadRequestID, "error", err)
+	} else {
+		slog.Info("worker configuration reloaded", "request_id", reload.ReloadRequestID, "config_digest", worker.digest)
+	}
 	return err
 }
 

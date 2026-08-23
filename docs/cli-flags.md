@@ -394,9 +394,11 @@ sudo tun-proxy service reload \
 `~/.config/tun-proxy/config.yaml`，等价于显式传入该路径，但不能和 `-config` 同时使用。
 使用任一配置参数时，CLI 会安全读取并校验指定文件，继续检查不可热重载字段和 direct 出口
 网口，并原子同步托管配置。随后 CLI 连接 root-only `/var/run/tun-proxy/control.sock`，发送期望
-配置摘要，并等待 supervisor 返回 worker 的最终成功或失败结果；status reload counters 仅用于
-观测，不再用于关联当前 CLI 请求。运行时拒绝、确认超时或摘要不一致时，CLI 恢复旧托管配置，
-重新计算旧配置摘要，并通过同一 control socket 确认运行时恢复。`SIGHUP` 仅保留为手工兼容入口。
+配置摘要和 128-bit reload request ID，并等待 supervisor 返回 worker 的最终成功或失败结果；
+status reload counters 仅用于观测，不再用于关联当前 CLI 请求。control 断线时 CLI 会用同一 ID
+安全重试并恢复缓存结果。运行时拒绝、确认超时或摘要不一致时，CLI 恢复旧托管配置，重新计算旧
+配置摘要，并使用新的 request ID、相同 operation ID 和 `rollback_of` 通过同一 control socket
+确认运行时恢复。`SIGHUP` 仅保留为会自动生成关联 ID 的手工兼容入口。
 服务未运行或尚未进入 `running` 阶段时不会复制配置；同步完整用户配置应使用
 `service sync-user-config`。
 

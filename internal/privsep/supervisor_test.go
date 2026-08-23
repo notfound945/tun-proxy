@@ -52,7 +52,7 @@ func TestSupervisorSessionProtocolLifecycle(t *testing.T) {
 			peerDone <- err
 			return
 		}
-		if err := codec.Send(KindReloadResult, requestID, ReloadResult{ConfigDigest: reload.ConfigDigest}); err != nil {
+		if err := codec.Send(KindReloadResult, requestID, ReloadResult{ReloadRequestID: reload.ReloadRequestID, ConfigDigest: reload.ConfigDigest}); err != nil {
 			peerDone <- err
 			return
 		}
@@ -78,7 +78,7 @@ func TestSupervisorSessionProtocolLifecycle(t *testing.T) {
 	}
 	contents := []byte("version: 2\n")
 	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
-	if err := session.Reload(ctx, Reload{Config: contents, ConfigDigest: digest}); err != nil {
+	if err := session.Reload(ctx, Reload{ReloadRequestID: testReloadRequestID, Config: contents, ConfigDigest: digest}); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Shutdown(ctx, "test complete"); err != nil {
@@ -149,8 +149,8 @@ func TestSupervisorSessionReportsWorkerExitAndReloadFailure(t *testing.T) {
 			_ = codec.Send(KindPrepared, 0, Prepared{PID: 99, UID: 501, GID: 20})
 			_, _, _ = ReceiveKind[Commit](codec, KindCommit)
 			_ = codec.Send(KindRunning, 0, Running{ConfigDigest: bootstrap.ConfigDigest})
-			_, requestID, _ := ReceiveKind[Reload](codec, KindReload)
-			_ = codec.Send(KindReloadResult, requestID, ReloadResult{Error: "invalid reload"})
+			reload, requestID, _ := ReceiveKind[Reload](codec, KindReload)
+			_ = codec.Send(KindReloadResult, requestID, ReloadResult{ReloadRequestID: reload.ReloadRequestID, Error: "invalid reload"})
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -162,7 +162,7 @@ func TestSupervisorSessionReportsWorkerExitAndReloadFailure(t *testing.T) {
 		}
 		contents := []byte("version: 2\n")
 		digest := fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
-		if err := session.Reload(ctx, Reload{Config: contents, ConfigDigest: digest}); err == nil || err.Error() != "invalid reload" {
+		if err := session.Reload(ctx, Reload{ReloadRequestID: testReloadRequestID, Config: contents, ConfigDigest: digest}); err == nil || err.Error() != "invalid reload" {
 			t.Fatalf("Reload() error = %v", err)
 		}
 	})
@@ -210,7 +210,7 @@ func TestSupervisorSessionRecoversAfterTimedOutReload(t *testing.T) {
 		}
 		close(firstReceived)
 		<-releaseFirst
-		if sendErr := codec.Send(KindReloadResult, firstID, ReloadResult{ConfigDigest: first.ConfigDigest}); sendErr != nil {
+		if sendErr := codec.Send(KindReloadResult, firstID, ReloadResult{ReloadRequestID: first.ReloadRequestID, ConfigDigest: first.ConfigDigest}); sendErr != nil {
 			peerDone <- sendErr
 			return
 		}
@@ -219,7 +219,7 @@ func TestSupervisorSessionRecoversAfterTimedOutReload(t *testing.T) {
 			peerDone <- receiveErr
 			return
 		}
-		if sendErr := codec.Send(KindReloadResult, secondID, ReloadResult{ConfigDigest: second.ConfigDigest}); sendErr != nil {
+		if sendErr := codec.Send(KindReloadResult, secondID, ReloadResult{ReloadRequestID: second.ReloadRequestID, ConfigDigest: second.ConfigDigest}); sendErr != nil {
 			peerDone <- sendErr
 			return
 		}
@@ -245,7 +245,7 @@ func TestSupervisorSessionRecoversAfterTimedOutReload(t *testing.T) {
 	defer cancelFirst()
 	firstResult := make(chan error, 1)
 	go func() {
-		firstResult <- session.Reload(firstCtx, Reload{Config: contents, ConfigDigest: digest})
+		firstResult <- session.Reload(firstCtx, Reload{ReloadRequestID: testReloadRequestID, Config: contents, ConfigDigest: digest})
 	}()
 	select {
 	case <-firstReceived:
@@ -257,7 +257,7 @@ func TestSupervisorSessionRecoversAfterTimedOutReload(t *testing.T) {
 	}
 	close(releaseFirst)
 
-	if err := session.Reload(lifecycleCtx, Reload{Config: contents, ConfigDigest: digest}); err != nil {
+	if err := session.Reload(lifecycleCtx, Reload{ReloadRequestID: testReloadRequestID, Config: contents, ConfigDigest: digest}); err != nil {
 		t.Fatalf("second Reload error = %v", err)
 	}
 	if err := session.Shutdown(lifecycleCtx, "test complete"); err != nil {
@@ -365,5 +365,41 @@ func TestSupervisorSessionShutdownAcceptsConcurrentCleanExit(t *testing.T) {
 		cancel()
 		_ = supervisorConnection.Close()
 		_ = workerConnection.Close()
+	}
+}
+
+func TestSupervisorSessionRejectsWrongExternalReloadRequestID(t *testing.T) {
+	supervisorConnection, workerConnection := net.Pipe()
+	defer supervisorConnection.Close() //nolint:errcheck // Test cleanup.
+	defer workerConnection.Close()     //nolint:errcheck // Test cleanup.
+	session, err := NewSupervisorSession(supervisorConnection, 99, Identity{UID: 501, GID: 20}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		codec, _ := NewCodec(workerConnection, workerConnection)
+		bootstrap, _, _ := ReceiveKind[Bootstrap](codec, KindBootstrap)
+		_ = codec.Send(KindPrepared, 0, Prepared{PID: 99, UID: 501, GID: 20})
+		_, _, _ = ReceiveKind[Commit](codec, KindCommit)
+		_ = codec.Send(KindRunning, 0, Running{ConfigDigest: bootstrap.ConfigDigest})
+		reload, requestID, _ := ReceiveKind[Reload](codec, KindReload)
+		_ = codec.Send(KindReloadResult, requestID, ReloadResult{
+			ReloadRequestID: "11111111111111111111111111111111",
+			ConfigDigest:    reload.ConfigDigest,
+		})
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err := session.Bootstrap(ctx, validBootstrap()); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Commit(ctx, testDigest); err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte("version: 2\n")
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
+	err = session.Reload(ctx, Reload{ReloadRequestID: testReloadRequestID, Config: contents, ConfigDigest: digest})
+	if err == nil || !strings.Contains(err.Error(), "worker reload request ID") {
+		t.Fatalf("Reload() error = %v", err)
 	}
 }

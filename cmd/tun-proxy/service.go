@@ -36,6 +36,7 @@ func serviceCommand(args []string) (resultErr error) {
 		if err != nil {
 			return err
 		}
+		ctx = context.WithValue(ctx, serviceOperationIDContextKey{}, guard.Metadata.ID)
 		defer func() {
 			resultErr = errors.Join(resultErr, guard.Close())
 		}()
@@ -261,12 +262,16 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		}
 	}
 
-	response, reloadErr := requestServiceReload(ctx, state.ControlSocket, uint32(manager.OwnerUID), expectedDigest, options.timeout, control.Reload)
+	request, err := newServiceReloadRequest(ctx, expectedDigest, "")
+	if err != nil {
+		return err
+	}
+	response, reloadErr := requestServiceReload(ctx, state.ControlSocket, uint32(manager.OwnerUID), request, options.timeout, control.Reload)
 	if reloadErr != nil {
 		if configUpdate == nil {
 			return reloadErr
 		}
-		rollbackErr := rollbackServiceReloadConfig(manager, configUpdate, state.ControlSocket, options.timeout, control.Reload)
+		rollbackErr := rollbackServiceReloadConfig(ctx, manager, configUpdate, state.ControlSocket, options.timeout, request.OperationID, request.RequestID, control.Reload)
 		if rollbackErr != nil {
 			return errors.Join(fmt.Errorf("apply synchronized configuration: %w", reloadErr), rollbackErr)
 		}
@@ -292,13 +297,34 @@ func resolveServiceReloadConfigPath(options serviceReloadOptions) (string, error
 	return options.configPath, nil
 }
 
-type serviceControlReload func(context.Context, string, uint32, string) (control.ReloadResponse, error)
+type serviceOperationIDContextKey struct{}
+
+type serviceControlReload func(context.Context, string, uint32, control.ReloadRequest) (control.ReloadResponse, error)
+
+func newServiceReloadRequest(ctx context.Context, expectedDigest, rollbackOf string) (control.ReloadRequest, error) {
+	operationID, _ := ctx.Value(serviceOperationIDContextKey{}).(string)
+	if operationID == "" {
+		var err error
+		operationID, err = control.NewRequestID()
+		if err != nil {
+			return control.ReloadRequest{}, fmt.Errorf("generate service operation ID: %w", err)
+		}
+	}
+	requestID, err := control.NewRequestID()
+	if err != nil {
+		return control.ReloadRequest{}, fmt.Errorf("generate reload request ID: %w", err)
+	}
+	return control.ReloadRequest{
+		Version: control.Version, Kind: control.KindReload, RequestID: requestID,
+		OperationID: operationID, RollbackOf: rollbackOf, ExpectedConfigDigest: expectedDigest,
+	}, nil
+}
 
 func requestServiceReload(
 	ctx context.Context,
 	socket string,
 	serverUID uint32,
-	expectedDigest string,
+	request control.ReloadRequest,
 	timeout time.Duration,
 	reload serviceControlReload,
 ) (control.ReloadResponse, error) {
@@ -307,11 +333,28 @@ func requestServiceReload(
 	}
 	reloadCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	response, err := reload(reloadCtx, socket, serverUID, expectedDigest)
-	if err != nil {
-		return response, fmt.Errorf("request supervisor reload: %w", err)
+	for {
+		response, err := reload(reloadCtx, socket, serverUID, request)
+		if err == nil && response.Result == control.ResultSucceeded {
+			if response.ConfigDigest != request.ExpectedConfigDigest {
+				return response, fmt.Errorf("supervisor reloaded config digest %q, want %q", response.ConfigDigest, request.ExpectedConfigDigest)
+			}
+			return response, nil
+		}
+		if err != nil && !control.IsTransportError(err) {
+			return response, fmt.Errorf("request supervisor reload: %w", err)
+		}
+		if err == nil && response.Result != control.ResultRunning {
+			return response, fmt.Errorf("request supervisor reload returned unexpected result %q", response.Result)
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-reloadCtx.Done():
+			timer.Stop()
+			return response, reloadCtx.Err()
+		case <-timer.C:
+		}
 	}
-	return response, nil
 }
 
 type serviceConfigRollback interface {
@@ -319,10 +362,13 @@ type serviceConfigRollback interface {
 }
 
 func rollbackServiceReloadConfig(
+	ctx context.Context,
 	manager *launchservice.Manager,
 	update serviceConfigRollback,
 	socket string,
 	timeout time.Duration,
+	operationID string,
+	rollbackOf string,
 	reload serviceControlReload,
 ) error {
 	if err := update.Rollback(); err != nil {
@@ -334,7 +380,12 @@ func rollbackServiceReloadConfig(
 	}
 	recoveryCtx, cancel := context.WithTimeout(context.Background(), timeout+5*time.Second)
 	defer cancel()
-	if _, err := requestServiceReload(recoveryCtx, socket, uint32(manager.OwnerUID), rollbackDigest, timeout, reload); err != nil {
+	recoveryCtx = context.WithValue(recoveryCtx, serviceOperationIDContextKey{}, operationID)
+	request, err := newServiceReloadRequest(recoveryCtx, rollbackDigest, rollbackOf)
+	if err != nil {
+		return err
+	}
+	if _, err := requestServiceReload(recoveryCtx, socket, uint32(manager.OwnerUID), request, timeout, reload); err != nil {
 		return fmt.Errorf("restore rolled-back configuration in runtime: %w", err)
 	}
 	return nil

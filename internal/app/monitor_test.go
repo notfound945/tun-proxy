@@ -30,3 +30,17 @@ func TestRunMonitorReportsIPv6Fallback(t *testing.T) {
 		t.Fatalf("IPv6 status = %+v", snapshot.IPv6)
 	}
 }
+
+func TestRunMonitorRecordsReloadRequestResult(t *testing.T) {
+	runtime := &config.Config{FakeIP: config.FakeIP{MaxMappings: 1}}
+	monitor := newRunMonitor(time.Now(), "sha256:old", runtime, false, "")
+	at := time.Now().UTC()
+	monitor.reloadResult(at, "0123456789abcdef0123456789abcdef", "sha256:new", runtime, nil)
+	snapshot := monitor.snapshot()
+	if snapshot.Reload.LastRequestID != "0123456789abcdef0123456789abcdef" || snapshot.Reload.LastResult != "succeeded" || snapshot.Reload.LastCompleted != at {
+		t.Fatalf("reload status = %+v", snapshot.Reload)
+	}
+	if snapshot.ConfigDigest != "sha256:new" {
+		t.Fatalf("config digest = %q", snapshot.ConfigDigest)
+	}
+}

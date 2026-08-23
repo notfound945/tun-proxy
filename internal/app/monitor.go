@@ -40,17 +40,23 @@ func newRunMonitor(started time.Time, digest string, runtime *config.Config, ipv
 	}
 }
 
-func (monitor *runMonitor) reloadResult(at time.Time, digest string, runtime *config.Config, err error) {
+func (monitor *runMonitor) reloadResult(at time.Time, requestID, digest string, runtime *config.Config, err error) {
 	monitor.mutex.Lock()
 	defer monitor.mutex.Unlock()
+	monitor.reload.LastRequestID = requestID
 	monitor.reload.LastAttempt = at
+	monitor.reload.LastCompleted = at
 	if err != nil {
 		monitor.reload.Failures++
+		monitor.reload.LastResult = "failed"
+		monitor.reload.LastErrorCode = ""
 		monitor.reload.LastError = err.Error()
 		return
 	}
 	monitor.reload.Successes++
+	monitor.reload.LastResult = "succeeded"
 	monitor.reload.LastSuccess = at
+	monitor.reload.LastErrorCode = ""
 	monitor.reload.LastError = ""
 	monitor.digest = digest
 	monitor.limits = limitsFromConfig(runtime)

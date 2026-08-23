@@ -13,9 +13,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
@@ -23,15 +26,24 @@ import (
 const (
 	controlRequestTimeout = 35 * time.Second
 	maxConnections        = 16
+	requestCacheLimit     = 64
+	requestCacheTTL       = 10 * time.Minute
 )
 
 // ReloadHandler performs one reload and returns the digest that is active only
 // after the worker result and supervisor state update are complete.
-type ReloadHandler func(context.Context, string) (string, error)
+type ReloadHandler func(context.Context, ReloadRequest) (string, error)
 
 type socketIdentity struct {
 	device uint64
 	inode  uint64
+}
+
+type reloadRecord struct {
+	request  ReloadRequest
+	started  time.Time
+	done     chan struct{}
+	response ReloadResponse
 }
 
 // Server owns one root-side Unix control socket.
@@ -48,6 +60,8 @@ type Server struct {
 	connectionMutex sync.Mutex
 	active          map[*net.UnixConn]struct{}
 	connectionSlots chan struct{}
+	requestMutex    sync.Mutex
+	requests        map[string]*reloadRecord
 	closeOnce       sync.Once
 	closeErr        error
 }
@@ -90,7 +104,7 @@ func Start(path string, expectedUID uint32, handler ReloadHandler) (*Server, err
 	server := &Server{
 		path: path, ownerUID: expectedUID, identity: identity, listener: listener,
 		handler: handler, ctx: ctx, cancel: cancel, done: make(chan struct{}), active: make(map[*net.UnixConn]struct{}),
-		connectionSlots: make(chan struct{}, maxConnections),
+		connectionSlots: make(chan struct{}, maxConnections), requests: make(map[string]*reloadRecord),
 	}
 	go server.serve()
 	return server, nil
@@ -138,21 +152,133 @@ func (server *Server) handle(connection *net.UnixConn) {
 	request, err := readRequest(connection)
 	stopReadCancellation()
 	if err != nil {
-		_ = writeResponse(connection, ReloadResponse{Version: Version, Kind: KindReload, Error: err.Error()})
+		now := time.Now().UTC()
+		_ = writeResponse(connection, failedResponse(unknownRequestID, now, err))
 		return
 	}
-	requestCtx, cancel := context.WithTimeout(server.ctx, controlRequestTimeout)
-	defer cancel()
-	digest, reloadErr := server.handler(requestCtx, request.ExpectedConfigDigest)
-	response := ReloadResponse{Version: Version, Kind: KindReload, ConfigDigest: digest}
-	if reloadErr != nil {
-		response.ConfigDigest = ""
-		response.Error = reloadErr.Error()
-		if len(response.Error) > maxErrorSize {
-			response.Error = response.Error[:maxErrorSize]
+	_ = writeResponse(connection, server.processReload(request))
+}
+
+func (server *Server) processReload(request ReloadRequest) ReloadResponse {
+	now := time.Now().UTC()
+	server.requestMutex.Lock()
+	server.pruneExpiredRequestsLocked(now)
+	if existing := server.requests[request.RequestID]; existing != nil {
+		if !existing.request.sameIdentity(request) {
+			server.requestMutex.Unlock()
+			return failedResponse(request.RequestID, now, fmt.Errorf(
+				"reload request ID %s conflicts with an existing request", request.RequestID,
+			))
+		}
+		select {
+		case <-existing.done:
+			response := existing.response
+			server.requestMutex.Unlock()
+			return response
+		default:
+			response := ReloadResponse{
+				Version: Version, Kind: KindReloadResult, RequestID: request.RequestID,
+				Result: ResultRunning, StartedAt: existing.started,
+			}
+			server.requestMutex.Unlock()
+			return response
 		}
 	}
-	_ = writeResponse(connection, response)
+	server.pruneRequestsLocked(now)
+	if len(server.requests) >= requestCacheLimit {
+		server.requestMutex.Unlock()
+		return failedResponse(request.RequestID, now, errors.New("reload request cache is full"))
+	}
+	record := &reloadRecord{request: request, started: now, done: make(chan struct{})}
+	server.requests[request.RequestID] = record
+	server.requestMutex.Unlock()
+
+	go server.executeReload(record)
+	<-record.done
+	server.requestMutex.Lock()
+	response := record.response
+	server.requestMutex.Unlock()
+	return response
+}
+
+func (server *Server) executeReload(record *reloadRecord) {
+	requestCtx, cancel := context.WithTimeout(server.ctx, controlRequestTimeout)
+	digest, reloadErr := server.handler(requestCtx, record.request)
+	cancel()
+	completed := time.Now().UTC()
+	response := ReloadResponse{
+		Version: Version, Kind: KindReloadResult, RequestID: record.request.RequestID,
+		Result: ResultSucceeded, ConfigDigest: digest, StartedAt: record.started, CompletedAt: completed,
+	}
+	if reloadErr == nil {
+		if err := validateDigest(digest); err != nil {
+			reloadErr = fmt.Errorf("reload handler returned an invalid digest: %w", err)
+		}
+	}
+	if reloadErr != nil {
+		response = failedResponse(record.request.RequestID, record.started, reloadErr)
+		response.CompletedAt = completed
+	}
+	server.requestMutex.Lock()
+	record.response = response
+	close(record.done)
+	server.requestMutex.Unlock()
+}
+
+func failedResponse(requestID string, started time.Time, err error) ReloadResponse {
+	message := "reload failed"
+	if err != nil {
+		message = err.Error()
+	}
+	message = strings.ToValidUTF8(message, "�")
+	if len(message) > maxErrorSize {
+		message = message[:maxErrorSize]
+		for !utf8.ValidString(message) {
+			message = message[:len(message)-1]
+		}
+	}
+	return ReloadResponse{
+		Version: Version, Kind: KindReloadResult, RequestID: requestID,
+		Result: ResultFailed, StartedAt: started, CompletedAt: time.Now().UTC(), Error: message,
+	}
+}
+
+func (server *Server) pruneExpiredRequestsLocked(now time.Time) {
+	for requestID, record := range server.requests {
+		select {
+		case <-record.done:
+			if !record.response.CompletedAt.IsZero() && now.Sub(record.response.CompletedAt) >= requestCacheTTL {
+				delete(server.requests, requestID)
+			}
+		default:
+		}
+	}
+}
+
+func (server *Server) pruneRequestsLocked(now time.Time) {
+	server.pruneExpiredRequestsLocked(now)
+	if len(server.requests) < requestCacheLimit {
+		return
+	}
+	type completedRecord struct {
+		requestID   string
+		completedAt time.Time
+	}
+	completed := make([]completedRecord, 0, len(server.requests))
+	for requestID, record := range server.requests {
+		select {
+		case <-record.done:
+			completed = append(completed, completedRecord{requestID: requestID, completedAt: record.response.CompletedAt})
+		default:
+		}
+	}
+	sort.Slice(completed, func(i, j int) bool { return completed[i].completedAt.Before(completed[j].completedAt) })
+	for _, record := range completed {
+		if len(server.requests) < requestCacheLimit {
+			break
+		}
+		delete(server.requests, record.requestID)
+	}
 }
 
 func (server *Server) Close(ctx context.Context) error {

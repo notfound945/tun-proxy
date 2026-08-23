@@ -345,7 +345,9 @@ plist replacement, and prior-state restoration—not a hot reload. Default
 uninstall preserves configuration, mappings, and logs and remains directly
 reinstallable; purge deletes only exact known regular files and removes
 directories only when empty. Lifecycle commands require root and no mutable
-control socket was added.
+control socket was added in this historical slice; the later production control
+plane uses the root-only v2 socket with external reload request IDs and cached
+idempotent retries.
 This 8.7a implementation still ran as root; Phase 8.7b subsequently replaced
 it with the production split described below. Automated transaction, rollback,
 ownership, mode, and CLI gates pass. Real launchd installation, fixed direct execution,

@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
 	"testing"
 )
+
+const testReloadRequestID = "0123456789abcdef0123456789abcdef"
 
 const testDigest = "sha256:09bfcc6a14b83e2192b8673677725c84883ee9cd0c70e45c9ec09daa8f2b2847"
 
@@ -54,7 +57,7 @@ func TestCodecRejectsOversizedAndUnknownFrames(t *testing.T) {
 	}
 
 	var wire bytes.Buffer
-	contents := []byte(`{"version":1,"kind":"surprise","payload":{}}`)
+	contents := []byte(fmt.Sprintf(`{"version":%d,"kind":"surprise","payload":{}}`, ProtocolVersion))
 	binary.BigEndian.PutUint32(header, uint32(len(contents)))
 	wire.Write(header)
 	wire.Write(contents)
@@ -169,7 +172,8 @@ func TestBootstrapValidationRejectsPayloadDigestMismatch(t *testing.T) {
 
 func TestReloadValidation(t *testing.T) {
 	value := Reload{
-		Config: []byte("version: 1\n"), ConfigDigest: testDigest,
+		ReloadRequestID: testReloadRequestID,
+		Config:          []byte("version: 1\n"), ConfigDigest: testDigest,
 		InterfaceDNS: map[string][]netip.AddrPort{"en7": {netip.MustParseAddrPort("192.168.100.51:53")}},
 	}
 	if err := value.Validate(); err != nil {

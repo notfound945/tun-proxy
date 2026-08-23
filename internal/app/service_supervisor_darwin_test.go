@@ -171,3 +171,16 @@ func TestValidateExpectedReloadDigest(t *testing.T) {
 		t.Fatalf("mismatched control digest error = %v", err)
 	}
 }
+
+func TestNewSupervisorReloadRequestGeneratesExternalIDs(t *testing.T) {
+	request, err := newSupervisorReloadRequest(t.Context(), "sha256:test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.requestID) != 32 || len(request.operationID) != 32 || request.requestID == request.operationID {
+		t.Fatalf("request IDs = request=%q operation=%q", request.requestID, request.operationID)
+	}
+	if request.expectedDigest != "sha256:test" || request.context != t.Context() {
+		t.Fatalf("request = %+v", request)
+	}
+}

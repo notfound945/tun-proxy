@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	Version             = 1
+	Version             = 2
 	maxQueryRequestSize = 1024
 	queryRequestTimeout = 50 * time.Millisecond
 	statusQueryTimeout  = 2 * time.Second
@@ -94,11 +94,15 @@ type IPv6Status struct {
 }
 
 type ReloadStats struct {
-	Successes   uint64    `json:"successes"`
-	Failures    uint64    `json:"failures"`
-	LastAttempt time.Time `json:"last_attempt,omitempty"`
-	LastSuccess time.Time `json:"last_success,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
+	Successes     uint64    `json:"successes"`
+	Failures      uint64    `json:"failures"`
+	LastRequestID string    `json:"last_request_id,omitempty"`
+	LastResult    string    `json:"last_result,omitempty"`
+	LastAttempt   time.Time `json:"last_attempt,omitempty"`
+	LastCompleted time.Time `json:"last_completed,omitempty"`
+	LastSuccess   time.Time `json:"last_success,omitempty"`
+	LastErrorCode string    `json:"last_error_code,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
 }
 
 type NetworkStats struct {

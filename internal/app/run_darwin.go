@@ -466,7 +466,7 @@ func Run(ctx context.Context, runtime *config.Config, configDigest string, optio
 				ctx, runtime, &configDigest, &state, options, dataPlane, dnsServer,
 				runner, defaultRoutes, ipv6Enabled,
 			)
-			monitor.reloadResult(time.Now().UTC(), configDigest, next, err)
+			monitor.reloadResult(time.Now().UTC(), "", configDigest, next, err)
 			if err != nil {
 				emitRunEvent(options, "warn", "configuration reload rejected: "+err.Error())
 				continue

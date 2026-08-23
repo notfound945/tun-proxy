@@ -100,8 +100,11 @@ Lifecycle commands required effective UID 0 and operated on the launchd system
 domain. Runtime status used the existing local status socket. The later
 production control plane adds `/var/run/tun-proxy/control.sock` under the root
 supervisor: it is root-owned, mode `0600`, verifies the peer EUID is 0, and
-returns the final worker reload result. The worker status socket remains a
-read-only observability path rather than a reload acknowledgement channel.
+returns the final worker reload result. The production v2 protocol adds a
+128-bit external reload request ID, same-ID transport retries, bounded cached
+results, rollback correlation, and request IDs in worker status/logs. The worker
+status socket remains a read-only observability path rather than a reload
+acknowledgement channel.
 
 Process-rule configuration also remains unsupported. Moving the Phase 8.6
 `libproc` polling probe into a root daemon would not recover an exited

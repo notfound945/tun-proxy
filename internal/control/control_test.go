@@ -14,15 +14,27 @@ import (
 	"time"
 )
 
+const (
+	testRequestID   = "0123456789abcdef0123456789abcdef"
+	testOperationID = "fedcba9876543210fedcba9876543210"
+)
+
 const testDigest = "sha256:09bfcc6a14b83e2192b8673677725c84883ee9cd0c70e45c9ec09daa8f2b2847"
+
+func testReloadRequest() ReloadRequest {
+	return ReloadRequest{
+		Version: Version, Kind: KindReload, RequestID: testRequestID,
+		OperationID: testOperationID, ExpectedConfigDigest: testDigest,
+	}
+}
 
 func TestControlServerIsOwnerOnlyAndReturnsFinalReloadResult(t *testing.T) {
 	path := testSocketPath(t)
-	server, err := Start(path, uint32(os.Geteuid()), func(_ context.Context, expectedDigest string) (string, error) {
-		if expectedDigest != testDigest {
-			return "", fmt.Errorf("handler digest = %q", expectedDigest)
+	server, err := Start(path, uint32(os.Geteuid()), func(_ context.Context, request ReloadRequest) (string, error) {
+		if request.ExpectedConfigDigest != testDigest {
+			return "", fmt.Errorf("handler digest = %q", request.ExpectedConfigDigest)
 		}
-		return expectedDigest, nil
+		return request.ExpectedConfigDigest, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +56,7 @@ func TestControlServerIsOwnerOnlyAndReturnsFinalReloadResult(t *testing.T) {
 		t.Fatal("control socket inode was not captured")
 	}
 
-	response, err := Reload(t.Context(), path, uint32(os.Geteuid()), testDigest)
+	response, err := Reload(t.Context(), path, uint32(os.Geteuid()), testReloadRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +67,7 @@ func TestControlServerIsOwnerOnlyAndReturnsFinalReloadResult(t *testing.T) {
 
 func TestControlServerReturnsHandlerFailure(t *testing.T) {
 	path := testSocketPath(t)
-	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, string) (string, error) {
+	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, ReloadRequest) (string, error) {
 		return "", errors.New("worker rejected immutable setting")
 	})
 	if err != nil {
@@ -63,7 +75,7 @@ func TestControlServerReturnsHandlerFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { closeTestServer(t, server) })
 
-	response, err := Reload(t.Context(), path, uint32(os.Geteuid()), testDigest)
+	response, err := Reload(t.Context(), path, uint32(os.Geteuid()), testReloadRequest())
 	if err == nil || !strings.Contains(err.Error(), "worker rejected immutable setting") {
 		t.Fatalf("Reload() response=%+v error=%v", response, err)
 	}
@@ -104,7 +116,7 @@ func TestControlPeerCredentialRejectsUnexpectedUID(t *testing.T) {
 }
 
 func TestControlRequestRejectsUnknownTrailingAndOversizedData(t *testing.T) {
-	valid := fmt.Sprintf(`{"version":1,"kind":"reload","expected_config_digest":%q}`, testDigest)
+	valid := fmt.Sprintf(`{"version":%d,"kind":"reload","request_id":%q,"operation_id":%q,"expected_config_digest":%q}`, Version, testRequestID, testOperationID, testDigest)
 	tests := []struct {
 		name    string
 		payload string
@@ -113,7 +125,7 @@ func TestControlRequestRejectsUnknownTrailingAndOversizedData(t *testing.T) {
 		{name: "unknown field", payload: strings.TrimSuffix(valid, "}") + `,"extra":true}` + "\n", want: "unknown field"},
 		{name: "trailing data", payload: valid + ` {}` + "\n", want: "trailing data"},
 		{name: "missing newline", payload: valid, want: "newline"},
-		{name: "invalid digest", payload: `{"version":1,"kind":"reload","expected_config_digest":"sha256:nope"}` + "\n", want: "64 hex"},
+		{name: "invalid digest", payload: fmt.Sprintf(`{"version":%d,"kind":"reload","request_id":%q,"operation_id":%q,"expected_config_digest":"sha256:nope"}`, Version, testRequestID, testOperationID) + "\n", want: "64 hex"},
 		{name: "oversized", payload: strings.Repeat("x", maxMessageSize+1), want: "exceeds"},
 	}
 	for _, test := range tests {
@@ -132,7 +144,7 @@ func TestControlStartRefusesUnsafeStalePaths(t *testing.T) {
 		if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Start(path, uint32(os.Geteuid()), func(context.Context, string) (string, error) { return testDigest, nil })
+		_, err := Start(path, uint32(os.Geteuid()), func(context.Context, ReloadRequest) (string, error) { return testDigest, nil })
 		if err == nil || !strings.Contains(err.Error(), "not a Unix socket") {
 			t.Fatalf("Start() error = %v", err)
 		}
@@ -151,7 +163,7 @@ func TestControlStartRefusesUnsafeStalePaths(t *testing.T) {
 		if err := os.Symlink(target, path); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Start(path, uint32(os.Geteuid()), func(context.Context, string) (string, error) { return testDigest, nil })
+		_, err := Start(path, uint32(os.Geteuid()), func(context.Context, ReloadRequest) (string, error) { return testDigest, nil })
 		if err == nil || !strings.Contains(err.Error(), "not a Unix socket") {
 			t.Fatalf("Start() error = %v", err)
 		}
@@ -213,7 +225,7 @@ func TestControlCloseDoesNotRemoveReplacement(t *testing.T) {
 
 func TestControlCloseInterruptsIncompleteClient(t *testing.T) {
 	path := testSocketPath(t)
-	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, string) (string, error) { return testDigest, nil })
+	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, ReloadRequest) (string, error) { return testDigest, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +278,7 @@ func TestControlServerRemovesStaleOwnedSocketBeforeRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, string) (string, error) {
+	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, ReloadRequest) (string, error) {
 		return testDigest, nil
 	})
 	if err != nil {
@@ -290,7 +302,7 @@ func TestControlClientRejectsUnsafeSocketMetadata(t *testing.T) {
 		if err := os.Chmod(path, 0o660); err != nil {
 			t.Fatal(err)
 		}
-		_, err = Reload(t.Context(), path, uint32(os.Geteuid()), testDigest)
+		_, err = Reload(t.Context(), path, uint32(os.Geteuid()), testReloadRequest())
 		if err == nil || !strings.Contains(err.Error(), "permissions") {
 			t.Fatalf("Reload() error = %v", err)
 		}
@@ -310,7 +322,7 @@ func TestControlClientRejectsUnsafeSocketMetadata(t *testing.T) {
 		if err := os.Chmod(path, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, err = Reload(t.Context(), path, uint32(os.Geteuid()+1), testDigest)
+		_, err = Reload(t.Context(), path, uint32(os.Geteuid()+1), testReloadRequest())
 		if err == nil || !strings.Contains(err.Error(), "owned by UID") {
 			t.Fatalf("Reload() error = %v", err)
 		}
@@ -318,7 +330,10 @@ func TestControlClientRejectsUnsafeSocketMetadata(t *testing.T) {
 }
 
 func TestControlClientRejectsMalformedResponses(t *testing.T) {
-	valid := fmt.Sprintf(`{"version":1,"kind":"reload","config_digest":%q}`, testDigest)
+	started := time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+	completed := time.Now().UTC().Format(time.RFC3339Nano)
+	valid := fmt.Sprintf(`{"version":%d,"kind":%q,"request_id":%q,"result":%q,"config_digest":%q,"started_at":%q,"completed_at":%q}`,
+		Version, KindReloadResult, testRequestID, ResultSucceeded, testDigest, started, completed)
 	tests := []struct {
 		name    string
 		payload string
@@ -326,16 +341,17 @@ func TestControlClientRejectsMalformedResponses(t *testing.T) {
 	}{
 		{name: "unknown field", payload: strings.TrimSuffix(valid, "}") + `,"extra":true}` + "\n", want: "unknown field"},
 		{name: "trailing data", payload: valid + ` {}` + "\n", want: "trailing data"},
-		{name: "missing digest", payload: `{"version":1,"kind":"reload"}` + "\n", want: "64 hex"},
-		{name: "failure with digest", payload: strings.TrimSuffix(valid, "}") + `,"error":"failed"}` + "\n", want: "must not include"},
-		{name: "wrong version", payload: strings.Replace(valid, `"version":1`, `"version":2`, 1) + "\n", want: "version"},
-		{name: "wrong kind", payload: strings.Replace(valid, `"kind":"reload"`, `"kind":"other"`, 1) + "\n", want: "kind"},
+		{name: "missing digest", payload: fmt.Sprintf(`{"version":%d,"kind":%q,"request_id":%q,"result":%q,"started_at":%q,"completed_at":%q}`, Version, KindReloadResult, testRequestID, ResultSucceeded, started, completed) + "\n", want: "64 hex"},
+		{name: "failure with digest", payload: strings.Replace(valid, `"result":"succeeded"`, `"result":"failed","error":"failed"`, 1) + "\n", want: "must not include"},
+		{name: "wrong version", payload: strings.Replace(valid, fmt.Sprintf(`"version":%d`, Version), `"version":99`, 1) + "\n", want: "version"},
+		{name: "wrong kind", payload: strings.Replace(valid, `"kind":"reload_result"`, `"kind":"other"`, 1) + "\n", want: "kind"},
+		{name: "wrong request ID", payload: strings.Replace(valid, testRequestID, testOperationID, 1) + "\n", want: "request ID"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			path := testSocketPath(t)
 			served := serveRawControlResponse(t, path, test.payload)
-			_, err := Reload(t.Context(), path, uint32(os.Geteuid()), testDigest)
+			_, err := Reload(t.Context(), path, uint32(os.Geteuid()), testReloadRequest())
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Reload() error = %v, want %q", err, test.want)
 			}
@@ -350,7 +366,7 @@ func TestControlCloseAllowsFinalResponseToFlush(t *testing.T) {
 	path := testSocketPath(t)
 	handlerStarted := make(chan struct{})
 	releaseHandler := make(chan struct{})
-	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, string) (string, error) {
+	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, ReloadRequest) (string, error) {
 		close(handlerStarted)
 		<-releaseHandler
 		return "", errors.New("final worker rejection")
@@ -361,7 +377,7 @@ func TestControlCloseAllowsFinalResponseToFlush(t *testing.T) {
 
 	clientDone := make(chan error, 1)
 	go func() {
-		_, clientErr := Reload(context.Background(), path, uint32(os.Geteuid()), testDigest)
+		_, clientErr := Reload(context.Background(), path, uint32(os.Geteuid()), testReloadRequest())
 		clientDone <- clientErr
 	}()
 	<-handlerStarted
@@ -417,7 +433,7 @@ func serveRawControlResponse(t *testing.T, path, payload string) <-chan error {
 
 func TestControlServerLimitsConcurrentConnections(t *testing.T) {
 	path := testSocketPath(t)
-	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, string) (string, error) {
+	server, err := Start(path, uint32(os.Geteuid()), func(context.Context, ReloadRequest) (string, error) {
 		return testDigest, nil
 	})
 	if err != nil {
@@ -467,4 +483,151 @@ func waitForActiveConnections(t *testing.T, server *Server, want int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("active control connections did not reach %d", want)
+}
+
+func TestControlServerDeduplicatesRunningAndCompletedRequests(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	calls := 0
+	server := &Server{
+		ctx: context.Background(),
+		handler: func(_ context.Context, request ReloadRequest) (string, error) {
+			calls++
+			close(started)
+			<-release
+			return request.ExpectedConfigDigest, nil
+		},
+		requests: make(map[string]*reloadRecord),
+	}
+	request := testReloadRequest()
+	first := make(chan ReloadResponse, 1)
+	go func() { first <- server.processReload(request) }()
+	<-started
+
+	running := server.processReload(request)
+	if running.Result != ResultRunning || running.RequestID != request.RequestID {
+		t.Fatalf("running duplicate = %+v", running)
+	}
+	close(release)
+	final := <-first
+	if final.Result != ResultSucceeded || final.ConfigDigest != testDigest {
+		t.Fatalf("final response = %+v", final)
+	}
+	cached := server.processReload(request)
+	if cached != final {
+		t.Fatalf("cached response = %+v, want %+v", cached, final)
+	}
+	if calls != 1 {
+		t.Fatalf("handler calls = %d, want 1", calls)
+	}
+
+	conflict := request
+	conflict.OperationID = "11111111111111111111111111111111"
+	response := server.processReload(conflict)
+	if response.Result != ResultFailed || !strings.Contains(response.Error, "conflicts") {
+		t.Fatalf("conflict response = %+v", response)
+	}
+}
+
+func TestControlServerRecoversResultAfterClientDisconnect(t *testing.T) {
+	path := testSocketPath(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	calls := 0
+	server, err := Start(path, uint32(os.Geteuid()), func(_ context.Context, request ReloadRequest) (string, error) {
+		calls++
+		close(started)
+		<-release
+		return request.ExpectedConfigDigest, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeTestServer(t, server) })
+
+	connection, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testReloadRequest()
+	if err := writeFrame(connection, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	close(release)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		response, reloadErr := Reload(t.Context(), path, uint32(os.Geteuid()), request)
+		if reloadErr == nil && response.Result == ResultSucceeded {
+			if response.ConfigDigest != testDigest || calls != 1 {
+				t.Fatalf("response=%+v calls=%d", response, calls)
+			}
+			return
+		}
+		if reloadErr != nil || time.Now().After(deadline) {
+			t.Fatalf("recover Reload() response=%+v error=%v", response, reloadErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestControlServerPreservesCachedDuplicateAtCapacity(t *testing.T) {
+	now := time.Now().UTC()
+	request := testReloadRequest()
+	server := &Server{ctx: context.Background(), requests: make(map[string]*reloadRecord)}
+	for index := 0; index < requestCacheLimit; index++ {
+		requestID := fmt.Sprintf("%032x", index+1)
+		done := make(chan struct{})
+		close(done)
+		recordRequest := request
+		recordRequest.RequestID = requestID
+		server.requests[requestID] = &reloadRecord{
+			request: recordRequest, started: now.Add(-time.Minute), done: done,
+			response: ReloadResponse{
+				Version: Version, Kind: KindReloadResult, RequestID: requestID,
+				Result: ResultSucceeded, ConfigDigest: testDigest,
+				StartedAt: now.Add(-time.Minute), CompletedAt: now.Add(-time.Second),
+			},
+		}
+	}
+	request.RequestID = fmt.Sprintf("%032x", 1)
+	want := server.requests[request.RequestID].response
+	got := server.processReload(request)
+	if got != want || len(server.requests) != requestCacheLimit {
+		t.Fatalf("cached duplicate=%+v want=%+v cache=%d", got, want, len(server.requests))
+	}
+}
+
+func TestControlRequestCachePrunesExpiredAndOldestCompletedRecords(t *testing.T) {
+	now := time.Now().UTC()
+	server := &Server{requests: make(map[string]*reloadRecord)}
+	for index := 0; index < requestCacheLimit; index++ {
+		requestID := fmt.Sprintf("%032x", index+1)
+		done := make(chan struct{})
+		close(done)
+		server.requests[requestID] = &reloadRecord{
+			done:     done,
+			response: ReloadResponse{CompletedAt: now.Add(-time.Duration(index+1) * time.Second)},
+		}
+	}
+	server.pruneRequestsLocked(now)
+	if len(server.requests) != requestCacheLimit-1 {
+		t.Fatalf("cache size after capacity prune = %d, want %d", len(server.requests), requestCacheLimit-1)
+	}
+
+	expiredID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	done := make(chan struct{})
+	close(done)
+	server.requests[expiredID] = &reloadRecord{
+		done:     done,
+		response: ReloadResponse{CompletedAt: now.Add(-requestCacheTTL)},
+	}
+	server.pruneRequestsLocked(now)
+	if _, exists := server.requests[expiredID]; exists {
+		t.Fatal("expired reload result was not pruned")
+	}
 }
