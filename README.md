@@ -149,6 +149,7 @@ sudo tun-proxy service restart
 sudo tun-proxy service sync-user-config
 sudo tun-proxy service reload
 sudo tun-proxy service logs -follow
+sudo tun-proxy status -fake-ip
 ```
 
 `service stop` 会禁用并卸载 launchd job，避免 `KeepAlive` 在停止后继续重启进程；安装文件和

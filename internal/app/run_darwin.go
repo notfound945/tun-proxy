@@ -400,7 +400,7 @@ func Run(ctx context.Context, runtime *config.Config, configDigest string, optio
 		}
 	}
 	statusPath := runtime.System.StateFile + ".sock"
-	statusServer, err = runtimestatus.Start(statusPath, func() runtimestatus.Snapshot {
+	statusServer, err = runtimestatus.StartWithOptions(statusPath, func(options runtimestatus.QueryOptions) runtimestatus.Snapshot {
 		snapshot := monitor.snapshot()
 		snapshot.Resources = runtimestatus.Resources()
 		snapshot.Netstack = ipStack.Stats()
@@ -409,6 +409,14 @@ func Run(ctx context.Context, runtime *config.Config, configDigest string, optio
 		snapshot.FakeIP = fakePool.Stats()
 		if fakeIPv6Pool != nil {
 			snapshot.FakeIPv6 = fakeIPv6Pool.Stats()
+		}
+		if options.IncludeFakeIPMappings {
+			ipv4Mappings := fakePool.Snapshot().Mappings
+			var ipv6Mappings []fakeip.Mapping
+			if fakeIPv6Pool != nil {
+				ipv6Mappings = fakeIPv6Pool.Snapshot().Mappings
+			}
+			snapshot.FakeIPMappings = runtimestatus.NewMappingSet(ipv4Mappings, ipv6Mappings)
 		}
 		if packetPump != nil {
 			snapshot.TUN = packetPump.Stats()

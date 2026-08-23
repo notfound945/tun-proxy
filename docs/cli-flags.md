@@ -211,7 +211,8 @@ sudo tun-proxy run
 
 ```sh
 sudo tun-proxy status
-sudo tun-proxy status -json
+sudo tun-proxy status -fake-ip
+sudo tun-proxy status -fake-ip -json
 sudo tun-proxy status -state /var/run/tun-proxy/state.json
 ```
 
@@ -219,9 +220,13 @@ sudo tun-proxy status -state /var/run/tun-proxy/state.json
 | --- | --- | --- |
 | `-state PATH` | `/var/run/tun-proxy/state.json` | 要读取的运行恢复状态。 |
 | `-json` | `false` | 以 JSON 输出完整运行快照。 |
+| `-fake-ip` | `false` | 按需包含实时 IPv4/IPv6 Fake IP 映射。 |
 
 进程存活且状态中包含 status socket 时，该命令还会报告实时 DNS、TCP、UDP、Fake IP、
-重载、资源和 TUN 指标。
+重载、资源和 TUN 指标。`-fake-ip` 会额外输出每条映射的地址、域名和过期时间；与
+`-json` 组合时，映射位于 `fake_ip_mappings.ipv4` 和 `fake_ip_mappings.ipv6`。映射列表
+只从正在运行的进程读取，服务停止或没有可用 status socket 时该 flag 会报错。普通
+`status` 不请求映射列表，避免映射数量较大时增加状态查询开销。
 
 ## `cleanup`
 

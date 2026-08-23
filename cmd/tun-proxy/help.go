@@ -126,6 +126,9 @@ file and status socket; without sudo it still reports available checks.
 	"status": `usage: tun-proxy status [options]
 
 {{generated-options}}
+
+-fake-ip requests the live IPv4/IPv6 mapping list from the running process.
+It requires a live status socket and can be combined with -json.
 `,
 	"cleanup": `usage: tun-proxy cleanup [options]
 

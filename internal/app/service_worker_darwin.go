@@ -225,7 +225,7 @@ func (worker *ServiceWorker) Prepare(ctx context.Context, bootstrap privsep.Boot
 			return worker.dataCtx.Err()
 		}
 	})
-	statusServer, err := runtimestatus.Start(bootstrap.StatusSocket, worker.snapshot)
+	statusServer, err := runtimestatus.StartWithOptions(bootstrap.StatusSocket, worker.snapshotWithOptions)
 	if err != nil {
 		worker.cancelData()
 		closeCtx, cancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
@@ -424,7 +424,7 @@ func (worker *ServiceWorker) monitorNetwork() {
 	}
 }
 
-func (worker *ServiceWorker) snapshot() runtimestatus.Snapshot {
+func (worker *ServiceWorker) snapshotWithOptions(options runtimestatus.QueryOptions) runtimestatus.Snapshot {
 	worker.mutex.Lock()
 	monitor := worker.monitor
 	stack := worker.stack
@@ -454,6 +454,14 @@ func (worker *ServiceWorker) snapshot() runtimestatus.Snapshot {
 	}
 	if fakeIPv6Pool != nil {
 		snapshot.FakeIPv6 = fakeIPv6Pool.Stats()
+	}
+	if options.IncludeFakeIPMappings && fakePool != nil {
+		ipv4Mappings := fakePool.Snapshot().Mappings
+		var ipv6Mappings []fakeip.Mapping
+		if fakeIPv6Pool != nil {
+			ipv6Mappings = fakeIPv6Pool.Snapshot().Mappings
+		}
+		snapshot.FakeIPMappings = runtimestatus.NewMappingSet(ipv4Mappings, ipv6Mappings)
 	}
 	if packetPump != nil {
 		snapshot.TUN = packetPump.Stats()

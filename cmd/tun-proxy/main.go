@@ -244,6 +244,7 @@ func runConfigured(path string, managed bool) error {
 type statusOptions struct {
 	statePath  string
 	jsonOutput bool
+	showFakeIP bool
 }
 
 func newStatusFlagSet(output io.Writer, options *statusOptions) *flag.FlagSet {
@@ -253,6 +254,7 @@ func newStatusFlagSet(output io.Writer, options *statusOptions) *flag.FlagSet {
 	flags := newCommandFlagSet("status", output)
 	flags.StringVar(&options.statePath, "state", "/var/run/tun-proxy/state.json", "runtime state `PATH`")
 	flags.BoolVar(&options.jsonOutput, "json", false, "print the complete runtime snapshot as JSON")
+	flags.BoolVar(&options.showFakeIP, "fake-ip", false, "include live IPv4 and IPv6 Fake IP mappings")
 	return flags
 }
 
@@ -267,6 +269,9 @@ func statusCommand(args []string) error {
 	}
 	state, err := system.ReadState(options.statePath)
 	if errors.Is(err, os.ErrNotExist) {
+		if options.showFakeIP {
+			return errors.New("cannot inspect Fake IP mappings: tun-proxy is stopped (no state file)")
+		}
 		fmt.Println("tun-proxy is stopped (no state file)")
 		return nil
 	}
@@ -276,6 +281,9 @@ func statusCommand(args []string) error {
 	processErr := unix.Kill(state.PID, 0)
 	alive := processErr == nil || errors.Is(processErr, unix.EPERM)
 	if !alive || state.StatusSocket == "" {
+		if options.showFakeIP {
+			return errors.New("cannot inspect Fake IP mappings: a live runtime status socket is required")
+		}
 		if options.jsonOutput {
 			encoder := json.NewEncoder(os.Stdout)
 			encoder.SetIndent("", "  ")
@@ -284,9 +292,14 @@ func statusCommand(args []string) error {
 		fmt.Printf("phase=%s pid=%d alive=%t started=%s tun=%s\n", state.Phase, state.PID, alive, state.StartedAt.Format("2006-01-02T15:04:05Z07:00"), state.TUNName)
 		return nil
 	}
-	snapshot, err := runtimestatus.Query(context.Background(), state.StatusSocket)
+	snapshot, err := runtimestatus.QueryWithOptions(context.Background(), state.StatusSocket, runtimestatus.QueryOptions{
+		IncludeFakeIPMappings: options.showFakeIP,
+	})
 	if err != nil {
 		return err
+	}
+	if options.showFakeIP && snapshot.FakeIPMappings == nil {
+		return errors.New("running tun-proxy does not support Fake IP mapping inspection; restart it with the current binary")
 	}
 	if options.jsonOutput {
 		encoder := json.NewEncoder(os.Stdout)
@@ -309,6 +322,33 @@ func statusCommand(args []string) error {
 			fmt.Printf(" fallback_reason=%q", snapshot.IPv6.FallbackReason)
 		}
 		fmt.Println()
+	}
+	if options.showFakeIP {
+		return writeFakeIPMappings(os.Stdout, snapshot.FakeIPMappings)
+	}
+	return nil
+}
+
+func writeFakeIPMappings(writer io.Writer, mappings *runtimestatus.MappingSet) error {
+	if mappings == nil {
+		return errors.New("Fake IP mappings were not included in the runtime snapshot")
+	}
+	if _, err := fmt.Fprintf(writer, "fake_ip_mappings ipv4=%d ipv6=%d\n", len(mappings.IPv4), len(mappings.IPv6)); err != nil {
+		return err
+	}
+	for _, family := range []struct {
+		name     string
+		mappings []runtimestatus.Mapping
+	}{
+		{name: "ipv4", mappings: mappings.IPv4},
+		{name: "ipv6", mappings: mappings.IPv6},
+	} {
+		for _, mapping := range family.mappings {
+			if _, err := fmt.Fprintf(writer, "fake_ip_mapping family=%s address=%s domain=%s expires=%s\n",
+				family.name, mapping.Address, mapping.Domain, mapping.ExpiresAt.UTC().Format(time.RFC3339Nano)); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

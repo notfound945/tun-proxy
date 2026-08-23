@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,26 +24,67 @@ import (
 	internaltun "github.com/hailinpan/tun-proxy/internal/tun"
 )
 
-const Version = 1
+const (
+	Version             = 1
+	maxQueryRequestSize = 1024
+	queryRequestTimeout = 50 * time.Millisecond
+	statusQueryTimeout  = 2 * time.Second
+	mappingQueryTimeout = 10 * time.Second
+)
+
+// QueryOptions controls optional, potentially large sections of a runtime
+// snapshot. Normal status queries omit the mapping list.
+type QueryOptions struct {
+	IncludeFakeIPMappings bool
+}
+
+type queryRequest struct {
+	Version               int  `json:"version"`
+	IncludeFakeIPMappings bool `json:"include_fake_ip_mappings,omitempty"`
+}
+
+type Mapping struct {
+	Domain    string    `json:"domain"`
+	Address   string    `json:"address"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type MappingSet struct {
+	IPv4 []Mapping `json:"ipv4"`
+	IPv6 []Mapping `json:"ipv6"`
+}
+
+func NewMappingSet(ipv4, ipv6 []fakeip.Mapping) *MappingSet {
+	return &MappingSet{IPv4: copyMappings(ipv4), IPv6: copyMappings(ipv6)}
+}
+
+func copyMappings(source []fakeip.Mapping) []Mapping {
+	result := make([]Mapping, len(source))
+	for index, mapping := range source {
+		result[index] = Mapping{Domain: mapping.Domain, Address: mapping.Address, ExpiresAt: mapping.ExpiresAt}
+	}
+	return result
+}
 
 type Snapshot struct {
-	Version      int               `json:"version"`
-	PID          int               `json:"pid"`
-	StartedAt    time.Time         `json:"started_at"`
-	CapturedAt   time.Time         `json:"captured_at"`
-	ConfigDigest string            `json:"config_digest"`
-	Reload       ReloadStats       `json:"reload"`
-	Network      NetworkStats      `json:"network"`
-	Limits       Limits            `json:"limits"`
-	Resources    ResourceStats     `json:"resources"`
-	TUN          internaltun.Stats `json:"tun"`
-	Netstack     netstack.Stats    `json:"netstack"`
-	TCP          session.Stats     `json:"tcp"`
-	UDP          session.UDPStats  `json:"udp"`
-	DNS          fakedns.Stats     `json:"dns"`
-	FakeIP       fakeip.Stats      `json:"fake_ip"`
-	FakeIPv6     fakeip.Stats      `json:"fake_ipv6"`
-	IPv6         IPv6Status        `json:"ipv6"`
+	Version        int               `json:"version"`
+	PID            int               `json:"pid"`
+	StartedAt      time.Time         `json:"started_at"`
+	CapturedAt     time.Time         `json:"captured_at"`
+	ConfigDigest   string            `json:"config_digest"`
+	Reload         ReloadStats       `json:"reload"`
+	Network        NetworkStats      `json:"network"`
+	Limits         Limits            `json:"limits"`
+	Resources      ResourceStats     `json:"resources"`
+	TUN            internaltun.Stats `json:"tun"`
+	Netstack       netstack.Stats    `json:"netstack"`
+	TCP            session.Stats     `json:"tcp"`
+	UDP            session.UDPStats  `json:"udp"`
+	DNS            fakedns.Stats     `json:"dns"`
+	FakeIP         fakeip.Stats      `json:"fake_ip"`
+	FakeIPv6       fakeip.Stats      `json:"fake_ipv6"`
+	IPv6           IPv6Status        `json:"ipv6"`
+	FakeIPMappings *MappingSet       `json:"fake_ip_mappings,omitempty"`
 }
 
 type IPv6Status struct {
@@ -108,13 +150,20 @@ func Resources() ResourceStats {
 type Server struct {
 	path      string
 	listener  net.Listener
-	snapshot  func() Snapshot
+	snapshot  func(QueryOptions) Snapshot
 	done      chan struct{}
 	closeOnce sync.Once
 	closeErr  error
 }
 
 func Start(path string, snapshot func() Snapshot) (*Server, error) {
+	if snapshot == nil {
+		return nil, errors.New("status snapshot function is required")
+	}
+	return StartWithOptions(path, func(QueryOptions) Snapshot { return snapshot() })
+}
+
+func StartWithOptions(path string, snapshot func(QueryOptions) Snapshot) (*Server, error) {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, fmt.Errorf("status socket must be a clean absolute path: %q", path)
 	}
@@ -147,8 +196,9 @@ func (server *Server) serve() {
 		if err != nil {
 			return
 		}
-		_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
-		snapshot := server.snapshot()
+		options := readQueryOptions(connection)
+		_ = connection.SetDeadline(time.Now().Add(queryTimeout(options)))
+		snapshot := server.snapshot(options)
 		if snapshot.Version == 0 {
 			snapshot.Version = Version
 		}
@@ -181,18 +231,46 @@ func (server *Server) Close(ctx context.Context) error {
 	return server.closeErr
 }
 
+func readQueryOptions(connection net.Conn) QueryOptions {
+	_ = connection.SetReadDeadline(time.Now().Add(queryRequestTimeout))
+	decoder := json.NewDecoder(io.LimitReader(connection, maxQueryRequestSize))
+	decoder.DisallowUnknownFields()
+	var request queryRequest
+	if err := decoder.Decode(&request); err != nil || request.Version != Version {
+		return QueryOptions{}
+	}
+	return QueryOptions{IncludeFakeIPMappings: request.IncludeFakeIPMappings}
+}
+
 func Query(ctx context.Context, path string) (Snapshot, error) {
+	return QueryWithOptions(ctx, path, QueryOptions{})
+}
+
+func queryTimeout(options QueryOptions) time.Duration {
+	if options.IncludeFakeIPMappings {
+		return mappingQueryTimeout
+	}
+	return statusQueryTimeout
+}
+
+func QueryWithOptions(ctx context.Context, path string, options QueryOptions) (Snapshot, error) {
 	dialer := net.Dialer{Timeout: time.Second}
 	connection, err := dialer.DialContext(ctx, "unix", path)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("connect status socket: %w", err)
 	}
 	defer connection.Close() //nolint:errcheck // Best-effort cleanup.
-	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = connection.SetDeadline(time.Now().Add(queryTimeout(options)))
+	requestErr := json.NewEncoder(connection).Encode(queryRequest{
+		Version: Version, IncludeFakeIPMappings: options.IncludeFakeIPMappings,
+	})
 	decoder := json.NewDecoder(connection)
 	decoder.DisallowUnknownFields()
 	var snapshot Snapshot
 	if err := decoder.Decode(&snapshot); err != nil {
+		if requestErr != nil {
+			return Snapshot{}, errors.Join(fmt.Errorf("send runtime status query: %w", requestErr), fmt.Errorf("decode runtime status: %w", err))
+		}
 		return Snapshot{}, fmt.Errorf("decode runtime status: %w", err)
 	}
 	if snapshot.Version != Version {

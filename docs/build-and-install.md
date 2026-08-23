@@ -345,6 +345,7 @@ sudo tun-proxy service install -start-at-boot=true
 sudo tun-proxy service status
 sudo tun-proxy service status -json
 sudo tun-proxy status -json
+sudo tun-proxy status -fake-ip
 sudo tun-proxy diagnose
 ```
 
