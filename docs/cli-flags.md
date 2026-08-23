@@ -385,7 +385,7 @@ sudo tun-proxy service reload \
 | --- | --- | --- |
 | `-config PATH` | 不同步 | 校验并安装指定配置，然后进行热重载。 |
 | `-user-config` | `false` | 使用调用 `sudo` 的用户默认配置进行热重载，行为同 `-config`。 |
-| `-timeout DURATION` | `15s` | 等待运行时确认的正数时长。 |
+| `-timeout DURATION` | `15s` | 等待 supervisor/worker 最终结果的正数时长。 |
 
 `service reload` 始终要求服务处于 `running` 阶段。不带 `-config` 或 `-user-config` 时，只重新
 读取已经安装在 `/Library/Application Support/tun-proxy/config.yaml` 的托管配置。
@@ -393,9 +393,12 @@ sudo tun-proxy service reload \
 `-user-config` 会根据 `SUDO_USER` 选择调用者的
 `~/.config/tun-proxy/config.yaml`，等价于显式传入该路径，但不能和 `-config` 同时使用。
 使用任一配置参数时，CLI 会安全读取并校验指定文件，继续检查不可热重载字段和 direct 出口
-网口，原子同步托管配置，发送重载信号并等待 worker 以配置摘要确认。运行时拒绝、确认超时或
-摘要不一致时，恢复旧托管配置并再次触发重载。服务未运行或尚未进入 `running` 阶段时不会复制
-配置；同步完整用户配置应使用 `service sync-user-config`。
+网口，并原子同步托管配置。随后 CLI 连接 root-only `/var/run/tun-proxy/control.sock`，发送期望
+配置摘要，并等待 supervisor 返回 worker 的最终成功或失败结果；status reload counters 仅用于
+观测，不再用于关联当前 CLI 请求。运行时拒绝、确认超时或摘要不一致时，CLI 恢复旧托管配置，
+重新计算旧配置摘要，并通过同一 control socket 确认运行时恢复。`SIGHUP` 仅保留为手工兼容入口。
+服务未运行或尚未进入 `running` 阶段时不会复制配置；同步完整用户配置应使用
+`service sync-user-config`。
 
 服务必须已经安装。操作失败时，错误信息会提示运行 `sudo tun-proxy service logs` 查看托管服务日志。
 

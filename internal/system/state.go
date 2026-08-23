@@ -16,17 +16,18 @@ import (
 const StateVersion = 1
 
 type State struct {
-	Version      int          `json:"version"`
-	PID          int          `json:"pid"`
-	StartedAt    time.Time    `json:"started_at"`
-	ConfigDigest string       `json:"config_digest"`
-	Phase        string       `json:"phase"`
-	LockFile     string       `json:"lock_file,omitempty"`
-	TUNName      string       `json:"tun_name,omitempty"`
-	StatusSocket string       `json:"status_socket,omitempty"`
-	Route        *RouteState  `json:"route,omitempty"`
-	Routes       []RouteState `json:"routes,omitempty"`
-	DNS          []DNSState   `json:"dns,omitempty"`
+	Version       int          `json:"version"`
+	PID           int          `json:"pid"`
+	StartedAt     time.Time    `json:"started_at"`
+	ConfigDigest  string       `json:"config_digest"`
+	Phase         string       `json:"phase"`
+	LockFile      string       `json:"lock_file,omitempty"`
+	TUNName       string       `json:"tun_name,omitempty"`
+	StatusSocket  string       `json:"status_socket,omitempty"`
+	ControlSocket string       `json:"control_socket,omitempty"`
+	Route         *RouteState  `json:"route,omitempty"`
+	Routes        []RouteState `json:"routes,omitempty"`
+	DNS           []DNSState   `json:"dns,omitempty"`
 }
 
 type RouteState struct {
@@ -180,6 +181,9 @@ func validateState(state State) error {
 	}
 	if state.StatusSocket != "" && (!filepath.IsAbs(state.StatusSocket) || filepath.Clean(state.StatusSocket) != state.StatusSocket) {
 		return fmt.Errorf("status socket must be a clean absolute path: %q", state.StatusSocket)
+	}
+	if state.ControlSocket != "" && (!filepath.IsAbs(state.ControlSocket) || filepath.Clean(state.ControlSocket) != state.ControlSocket) {
+		return fmt.Errorf("control socket must be a clean absolute path: %q", state.ControlSocket)
 	}
 	return nil
 }

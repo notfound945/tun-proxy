@@ -138,8 +138,9 @@ sudo ./scripts/phase7-soak.sh 86400 60
    会话不迁移。
 4. **native IPv6**：在具备非链路本地 IPv6 地址和物理 IPv6 默认路由的网络上，完成真实
    IPv6 DNS、TCP/UDP 转发、CIDR、split-default 与恢复验收。
-5. **Phase 9 root 运维验收**：在维护窗口验证 managed stdout/stderr logs、可变配置 reload
-   不替换 worker PID、不可变配置拒绝且保持旧 generation，以及 restart 后 PID 替换、ready、
-   Fake DNS、转发和运行时指标恢复。
+5. **Phase 9 root 运维验收**：在维护窗口验证 managed stdout/stderr logs、root-only control
+   socket 的 peer UID/摘要校验、可变配置 reload 返回 worker 最终结果且不替换 worker PID、
+   不可变配置拒绝并保持旧 generation、rollback 通过 control response 确认，以及 restart 后 PID
+   替换、ready、Fake DNS、转发和运行时指标恢复。
 
 这些项目是剩余验收证据，不代表 IPv6、default route、UDP、持久化或权限分离功能尚未实现。

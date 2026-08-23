@@ -132,6 +132,7 @@ func newServiceSupervisorTestLayout(t *testing.T) (launchservice.Layout, []byte)
 		WorkerGroup:   "_tun-proxy",
 		WorkerDir:     filepath.Join(root, "run", "worker"),
 		StatusSocket:  filepath.Join(root, "run", "worker", "status.sock"),
+		ControlSocket: filepath.Join(root, "run", "control.sock"),
 		DataDir:       filepath.Join(root, "lib"),
 		State:         filepath.Join(root, "run", "state.json"),
 		Lock:          filepath.Join(root, "run", "lock"),
@@ -156,4 +157,17 @@ func newServiceSupervisorTestLayout(t *testing.T) (launchservice.Layout, []byte)
 		contents = bytes.ReplaceAll(contents, []byte(old), []byte(next))
 	}
 	return layout, contents
+}
+
+func TestValidateExpectedReloadDigest(t *testing.T) {
+	const actual = "sha256:actual"
+	if err := validateExpectedReloadDigest(actual, ""); err != nil {
+		t.Fatalf("signal reload digest validation = %v", err)
+	}
+	if err := validateExpectedReloadDigest(actual, actual); err != nil {
+		t.Fatalf("matching control digest validation = %v", err)
+	}
+	if err := validateExpectedReloadDigest(actual, "sha256:expected"); err == nil || !strings.Contains(err.Error(), "does not match requested digest") {
+		t.Fatalf("mismatched control digest error = %v", err)
+	}
 }

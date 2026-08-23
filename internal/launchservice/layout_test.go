@@ -169,3 +169,21 @@ func TestLayoutRequiresOperationLockPath(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestDefaultLayoutDefinesRootControlSocket(t *testing.T) {
+	layout := DefaultLayout()
+	if layout.ControlSocket != "/var/run/tun-proxy/control.sock" {
+		t.Fatalf("control socket = %q", layout.ControlSocket)
+	}
+	if filepath.Dir(layout.ControlSocket) != layout.RuntimeDir {
+		t.Fatalf("control socket parent = %q, want %q", filepath.Dir(layout.ControlSocket), layout.RuntimeDir)
+	}
+}
+
+func TestLayoutRejectsControlSocketOutsideRuntimeDirectory(t *testing.T) {
+	layout := testLayout(t)
+	layout.ControlSocket = filepath.Join(layout.WorkerDir, "control.sock")
+	if err := layout.Validate(); err == nil || !strings.Contains(err.Error(), "directly inside runtime directory") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}

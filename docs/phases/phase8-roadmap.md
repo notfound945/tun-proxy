@@ -373,6 +373,11 @@ Managed preflight now validates the fixed split ownership model: state and
 lock paths remain root-owned, while IPv4/IPv6 Fake IP persistence paths and
 their parent directory must be owned by the resolved worker UID. The public
 `check -service -config PATH` command exercises that installed-service layout.
+The current supervisor also owns a mode-`0600`
+`/var/run/tun-proxy/control.sock`, accepts only UID 0 peers, compares the CLI's
+expected configuration digest, and returns the worker's final reload result.
+SIGHUP remains available only as a manual compatibility entry point, and the
+worker status counters are no longer used to associate a CLI reload request.
 Service start also treats an observed running supervisor/worker runtime as
 authoritative when `launchctl kickstart` itself times out or is killed after
 the job has already become ready; a never-ready runtime still returns both the

@@ -371,8 +371,10 @@ sudo tun-proxy service logs -clear -follow
 
 `service stop` 会回滚运行期间的系统状态，禁用并卸载 launchd job，以阻止 `KeepAlive`
 再次拉起进程，但会保留安装；后续 `service start` 会重新启用并加载 job。`service reload`
-仅供运行中的服务热更新可重载配置；`service sync-user-config` 会同步完整用户配置，服务已运行时
-执行重启，服务未运行时保持停止。日志跟随可通过 `Ctrl-C` 退出，不会停止服务。`service logs -clear` 会清空
+仅供运行中的服务热更新可重载配置；它通过 root-only `/var/run/tun-proxy/control.sock` 发送期望
+配置摘要并等待 worker 最终结果，不再根据 status counters 猜测成功或失败。`service sync-user-config`
+会同步完整用户配置，服务已运行时执行重启，服务未运行时保持停止。日志跟随可通过 `Ctrl-C`
+退出，不会停止服务。`service logs -clear` 会清空
 stdout 和 stderr，使用 `-stream stdout|stderr` 可只清理指定日志；与 `-follow` 组合时会
 先清空再等待新日志。
 

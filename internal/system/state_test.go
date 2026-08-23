@@ -14,6 +14,8 @@ func TestStateRoundTripAndPermissions(t *testing.T) {
 	want := NewState("sha256:test")
 	want.Phase = "running"
 	want.TUNName = "utun7"
+	want.StatusSocket = "/var/run/tun-proxy/worker/status.sock"
+	want.ControlSocket = "/var/run/tun-proxy/control.sock"
 	want.Route = &RouteState{Prefix: "198.18.0.0/15", Interface: "utun7"}
 	want.Routes = []RouteState{
 		{Prefix: "fd00:7::/96", Interface: "utun7"},
@@ -37,6 +39,14 @@ func TestStateRoundTripAndPermissions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ReadState() = %#v, want %#v", got, want)
+	}
+}
+
+func TestStateRejectsInvalidControlSocketPath(t *testing.T) {
+	state := NewState("sha256:test")
+	state.ControlSocket = "relative/control.sock"
+	if err := WriteState(filepath.Join(t.TempDir(), "state.json"), state); err == nil || !strings.Contains(err.Error(), "control socket") {
+		t.Fatalf("WriteState() error = %v", err)
 	}
 }
 

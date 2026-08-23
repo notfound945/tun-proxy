@@ -12,8 +12,9 @@
 
 > 实施状态（2026-08-23）：第 2 节的跨进程 Service Operation Lock 已实现，包括独立锁路径、
 > 非阻塞 `flock`、完整命令事务覆盖、`sync-user-config`、managed cleanup 和真实子进程竞争测试。
-> operation holder 的 status 展示、第 3 节 Control Socket / 外部 Reload Request ID，以及第 4 节
-> 完整结构化错误仍按后续阶段实施。
+> 第 3 节的 P1 root-only Control Socket 基线也已实现：CLI 发送期望配置摘要，supervisor 返回
+> worker 最终结果，CLI 不再依赖 status counters，SIGHUP 仅保留为手工兼容入口。operation holder
+> 的 status 展示、P2 外部 Reload Request ID/幂等恢复，以及第 4 节完整结构化错误仍按后续阶段实施。
 
 ### 1.1 当前实现
 
@@ -45,7 +46,7 @@ internal/launchservice/manager.go
 
 `internal/daemon/lock_darwin.go` 中已有的锁是代理运行实例锁。该锁在代理整个运行期间持续持有，不能直接用于 service 生命周期操作，否则运行中的服务会阻止正常的 reload、stop、upgrade 等管理操作。
 
-#### reload 只在 privsep 内部有 Request ID
+#### Control Socket 已解决当前 CLI 的结果误关联，外部 Request ID 尚待实现
 
 `internal/privsep/protocol.go` 的消息已经包含：
 
@@ -58,16 +59,14 @@ type Message struct {
 }
 ```
 
-这个 `RequestID` 只负责 supervisor 和 worker 之间的协议帧匹配。
+这个 `RequestID` 只负责 supervisor 和 worker 之间的协议帧匹配。P1 已新增 root-only
+`/var/run/tun-proxy/control.sock`：CLI 发送 `expected_config_digest`，supervisor 等待现有
+`SupervisorSession.Reload()` 的准确 worker 响应及 state 持久化完成后，再在同一 control connection
+返回最终结果。因此 CLI 已移除 `launchctl kill SIGHUP` 加 status counters 的结果推断路径；status
+counters 继续用于观测，SIGHUP 继续作为手工兼容入口。
 
-CLI 目前仍通过 `launchctl kill SIGHUP` 发起 reload，并通过 status snapshot 中成功或失败计数器是否增加来判断结果：
-
-```go
-after.Reload.Failures > before.Reload.Failures
-after.Reload.Successes > before.Reload.Successes
-```
-
-并发 reload、迟到的 reload 结果或其他内部 reload 都可能被错误地识别为当前 CLI 请求的结果。
+尚未实现的是跨连接、跨进程可恢复的 128-bit 外部 Reload Request ID。连接在最终 response 到达前
+断开时，当前协议无法按同一 ID 查询或安全重试；这属于第 3.5 节及后续小节描述的 P2 范围。
 
 #### CLI 错误没有稳定协议
 
@@ -348,11 +347,12 @@ status 判断 operation 是否执行中时，应尝试获取非阻塞共享锁�
 
 ---
 
-## 3. Reload Request ID
+## 3. Root-only Control Socket 与外部 Reload Request ID
 
-### 3.1 ID 分层
+### 3.1 分阶段状态与 ID 分层
 
-保留现有 privsep `Message.RequestID uint64`，同时增加端到端 Reload Request ID。
+P1 已完成 root-only Control Socket 和最终结果返回，但没有引入新的外部 ID。P2 将保留现有
+privsep `Message.RequestID uint64`，同时增加端到端 Reload Request ID。
 
 | ID | 作用域 | 类型 |
 |---|---|---|
@@ -362,15 +362,15 @@ status 判断 operation 是否执行中时，应尝试获取非阻塞共享锁�
 
 IPC Request ID 和 Reload Request ID 不能混为同一个字段。前者是连接内部序号，后者需要在进程重启、日志、status 和 CLI 重试中保持可识别。
 
-### 3.2 推荐使用 Root-only Control Socket
+### 3.2 已实现 Root-only Control Socket
 
-新增：
+当前固定路径：
 
 ```text
 /var/run/tun-proxy/control.sock
 ```
 
-扩展 Layout：
+已扩展 Layout：
 
 ```go
 type Layout struct {
@@ -379,7 +379,7 @@ type Layout struct {
 }
 ```
 
-扩展 recovery state：
+已扩展 recovery state：
 
 ```go
 type State struct {
@@ -388,9 +388,9 @@ type State struct {
 }
 ```
 
-CLI 应从 state 中读取 control socket 地址，而不是自行猜测路径。
+CLI 从 state 中读取 control socket 地址，并要求它与固定 Layout 路径一致，而不是接受任意路径。
 
-建议新增包：
+已新增包：
 
 ```text
 internal/control/protocol.go
@@ -399,21 +399,62 @@ internal/control/client_darwin.go
 internal/control/control_test.go
 ```
 
-### 3.3 Control Socket 安全要求
+### 3.3 已实现的 Control Socket 安全要求
 
-- socket owner 为 root；
-- mode 为 `0600`；
+- socket 直接位于 root-owned、不可由 group/world 写入的 runtime directory；
+- socket owner 为 root，mode 为 `0600`；
 - 使用 `Lstat` 拒绝 symlink 和非 socket 路径；
-- 删除 stale socket 前校验 owner；
-- 使用 macOS peer credential 校验连接方 EUID 为 0；
-- 每个连接只处理一个请求；
-- 严格限制请求体大小，例如 64 KiB；
-- JSON decoder 使用 `DisallowUnknownFields()`；
-- 设置读取、写入和整个 operation 的 deadline；
-- 限制同时连接数；
-- 协议必须包含 version。
+- 删除 stale socket 前校验 owner，关闭时按 device/inode 拒绝删除替换对象；
+- 使用 macOS `LOCAL_PEERCRED` 校验连接方 EUID 为 0；
+- 每个连接只处理一个单行 JSON 请求；
+- 单个协议帧最多 8 KiB，错误文本最多 4 KiB；
+- JSON decoder 使用 `DisallowUnknownFields()` 并拒绝 trailing data；
+- 设置读取、写入、客户端等待和整个 operation 的 deadline/context；
+- 同时最多处理 16 个 control connections；
+- 请求和响应都必须包含并校验 protocol version 与 kind；
+- server shutdown 先停止 accept，再取消/等待 active requests，避免 accept/register 竞态，并允许已产生的最终 response 在清理前写出。
 
 ### 3.4 请求和响应协议
+
+#### 3.4.1 当前 P1 基线协议
+
+每个连接只发送一个以换行结束的 JSON document。当前请求：
+
+```json
+{
+  "version": 1,
+  "kind": "reload",
+  "expected_config_digest": "sha256:..."
+}
+```
+
+成功响应：
+
+```json
+{
+  "version": 1,
+  "kind": "reload",
+  "config_digest": "sha256:..."
+}
+```
+
+失败响应：
+
+```json
+{
+  "version": 1,
+  "kind": "reload",
+  "error": "worker rejected immutable setting"
+}
+```
+
+成功只表示 worker 已接受配置且 supervisor 已持久化新的 `state.ConfigDigest`。CLI 会校验返回摘要与
+请求摘要一致。配置安装后的 reload 失败时，CLI 先恢复旧托管配置、重新计算旧摘要，再发起一次
+control reload 确认 runtime 恢复。
+
+#### 3.4.2 P2 目标协议
+
+以下带外部 request/operation ID 和结构化错误的协议尚未实现，属于 P2/P3 目标。
 
 Reload 请求：
 
@@ -460,7 +501,7 @@ Reload 请求：
 
 推荐 control socket 返回最终结果，而不是只返回 accepted。这样 supervisor 自身的配置读取、digest 比较和 `PreflightReload` 失败可以立即返回，不会因为 worker reload 计数没有变化而一直等到 CLI timeout。
 
-### 3.5 完整调用链
+### 3.5 P2 目标完整调用链
 
 ```text
 CLI
@@ -495,7 +536,7 @@ CLI
  21. 释放 operation lock
 ```
 
-### 3.6 Privsep 修改
+### 3.6 P2 Privsep 修改
 
 扩展 payload，但保留现有 `Message.RequestID`：
 
@@ -523,7 +564,7 @@ type ReloadResult struct {
 
 由于 payload schema 发生变化，建议将 `privsep.ProtocolVersion` 从 1 升级到 2。
 
-### 3.7 Status Schema v2
+### 3.7 P2 Status Schema v2
 
 当前 `ReloadStats` 只记录计数、最后时间和错误字符串。建议扩展为：
 
@@ -543,26 +584,20 @@ type ReloadStats struct {
 
 同时将 `status.Version` 从 1 升级到 2。
 
-旧确认方式：
+P1 已删除以下旧确认方式：
 
 ```go
 after.Reload.Successes > before.Reload.Successes
 ```
 
-应改为：
-
-```go
-after.Reload.LastRequestID == requestID
-```
-
-正常路径直接使用 control response；status 中的 request ID 用于：
+当前正常路径直接使用 control response。P2 引入外部 ID 后，status 中的 request ID 用于：
 
 - control response 丢失后的恢复查询；
 - `service status -json`；
 - diagnose；
 - 日志和故障关联。
 
-### 3.8 幂等与断线恢复
+### 3.8 P2 幂等与断线恢复
 
 control server 建议保留一个有界结果缓存：
 
@@ -583,7 +618,7 @@ control server 建议保留一个有界结果缓存：
 
 这样 CLI 在连接中断后可以使用相同 request ID 安全重试，而不会重复执行一个无法关联的 reload。
 
-### 3.9 Rollback Request ID
+### 3.9 P2 Rollback Request ID
 
 配置应用失败后，rollback 必须生成新的 request ID：
 
@@ -599,19 +634,15 @@ control server 建议保留一个有界结果缓存：
 
 ### 3.10 SIGHUP 和旧协议兼容
 
-推荐默认采用严格策略：
+当前实现采用严格策略：
 
-- 新 CLI 发现 state 中没有 `control_socket` 时，返回 `SERVICE_PROTOCOL_TOO_OLD`；
-- 提示用户执行 `sudo tun-proxy service upgrade`；
-- 默认不自动回退到 SIGHUP 加计数器确认，因为这会重新引入错误关联风险。
+- 新 CLI 发现 state 中没有 `control_socket` 时直接报错；
+- control socket 必须等于固定 Layout 路径；
+- 不自动回退到 SIGHUP 加计数器确认，因为这会重新引入错误关联风险；
+- 不提供 `--legacy-signal` flag。
 
-如确实需要过渡，可提供显式参数：
-
-```text
-service reload --legacy-signal
-```
-
-SIGHUP 可以继续作为手工管理入口。supervisor 收到 SIGHUP 后，应自动生成一个 request ID，并进入与 control socket 请求相同的 reload 执行函数和日志链路。
+SIGHUP 继续作为手工管理入口，并与 control socket 请求调用同一个 reload 执行函数。P2 引入外部
+Request ID 后，SIGHUP 路径再自动生成 request ID 并进入相同的日志关联链路。
 
 ---
 
@@ -893,36 +924,40 @@ README.md
 
 ---
 
-## 6. 推荐实施顺序
+## 6. 实施顺序与当前状态
 
-### PR 1：结构化错误基础
+### P0：跨进程 Operation Lock（已完成）
 
-- 增加 `internal/apperror`；
-- 首先覆盖 root required、not installed、not running 和 timeout；
-- 增加 JSON error envelope 和退出码映射；
-- 暂不改变 service 业务流程。
+- 独立 operation lock path；
+- 所有 service 写操作在完整命令事务期间持锁；
+- Restart、Upgrade、Uninstall 避免嵌套自锁；
+- `sync-user-config` 和 managed cleanup 纳入同一互斥边界；
+- 真实子进程竞争测试已覆盖。
 
-### PR 2：跨进程 Operation Lock
+operation holder 的 status 展示仍可作为后续增强，不影响已完成的互斥语义。
 
-- 增加独立 operation lock path；
-- 所有 service 写操作在命令级持锁；
-- 重构 Restart、Upgrade、Uninstall 的嵌套调用；
-- 在 service status 中显示 `operation_in_flight`。
-
-### PR 3：Control Socket 和 Reload Request ID
+### P1：Root-only Control Socket（已完成）
 
 - 新增 root-only control socket；
-- 外部 reload request ID 贯穿 supervisor 和 worker；
-- privsep protocol 升级到 v2；
-- status schema 升级到 v2；
-- CLI 改为根据 request ID 和 control response 确认结果。
+- CLI 发送 expected config digest；
+- supervisor 返回现有 privsep 请求对应的 worker 最终结果；
+- CLI 删除默认的 SIGHUP 加计数器确认路径；
+- rollback 通过同一 control response 确认；
+- SIGHUP 仅保留为手工兼容入口。
 
-### PR 4：兼容清理
+### P2：外部 Reload Request ID（待实施）
 
-- 删除默认的 SIGHUP 加计数器确认路径；
-- SIGHUP 仅保留为手工兼容入口；
-- 增加重复 request ID 幂等缓存；
-- 补全 CLI、安装、升级和诊断文档。
+- 128-bit 外部 reload request ID 贯穿 CLI、control、supervisor、worker、status 和日志；
+- privsep protocol 与 status schema 按需要升级；
+- 增加断线安全重试、同 ID 幂等缓存、conflict 检查和 response 丢失后的结果查询；
+- rollback 使用新 ID，并记录 `rollback_of`。
+
+### P3：完整结构化错误（待实施）
+
+- 增加 `internal/apperror`；
+- 覆盖 typed error、JSON error envelope、全局输出模式和退出码映射；
+- 正确展开 `errors.Join` causes；
+- 确保 JSON 失败输出只有一个合法 document。
 
 ---
 
@@ -941,19 +976,28 @@ README.md
 
 `flock` 测试建议使用 helper subprocess，而不只使用同一测试进程中的两个 goroutine 或文件描述符，以覆盖真实的跨进程语义。
 
-### 7.2 Reload Request ID
+### 7.2 P1 Control Socket 与 P2 Reload Request ID
+
+P1 已覆盖：
+
+- control socket owner/mode、parent、peer UID 和固定路径校验；
+- stale socket 安全清理与 replacement inode 保护；
+- strict JSON、8 KiB 上限、未知字段、trailing data 和错误 schema 拒绝；
+- expected digest 一致性检查；
+- worker 成功或失败的最终 response；
+- CLI timeout 和不依赖 status polling；
+- apply 失败后的 rollback digest 与 control recovery reload；
+- shutdown 中止不完整客户端，同时允许已完成结果写出。
+
+P2 仍需覆盖：
 
 - 成功响应的 request ID 和 digest 与请求完全一致；
-- supervisor preflight 失败立即响应，不等待 timeout；
-- worker reload 失败返回相同 request ID；
 - 迟到或错误 request ID 不能确认当前请求；
 - 相同 ID 和相同 digest 重试返回缓存结果；
 - 相同 ID 和不同 digest 返回 `RELOAD_REQUEST_CONFLICT`；
-- apply 失败、rollback 成功；
-- apply 失败、rollback 失败并返回 `ROLLBACK_INCOMPLETE`；
+- apply/rollback 使用不同 ID，并在双重失败时返回 `ROLLBACK_INCOMPLETE`；
 - response 丢失后可以使用 request ID 恢复查询；
-- 旧服务没有 control socket 时返回 `SERVICE_PROTOCOL_TOO_OLD`；
-- 手工 SIGHUP 会生成 request ID 并进入统一 reload 流程。
+- 手工 SIGHUP 自动生成 request ID 并进入统一日志链路。
 
 ### 7.3 结构化错误
 
@@ -970,17 +1014,19 @@ README.md
 
 ## 8. 最终结论
 
-三项改动的推荐依赖关系为：
+当前采用并已完成前两步的顺序为：
 
 ```text
-结构化错误
+P0 跨进程 service operation lock（已完成）
     ↓
-跨进程 service operation lock
+P1 root-only control socket + 最终结果（已完成）
     ↓
-control socket + reload request ID
+P2 外部 reload request ID / 幂等恢复（待实施）
+    ↓
+P3 完整结构化错误（待实施）
 ```
 
-实现时必须遵守两个核心原则：
+后续实现必须继续遵守两个核心原则：
 
-1. operation lock 必须覆盖配置替换、runtime 确认、commit 和 rollback 的完整事务，不能只包住一次 SIGHUP 或 control request；
-2. 现有 privsep `uint64 RequestID` 应继续负责 supervisor/worker 帧匹配，同时新增独立的外部 Reload Request ID，负责 CLI 到最终结果的端到端关联。
+1. operation lock 覆盖配置替换、runtime 确认、commit 和 rollback 的完整事务，不能只包住一次 control request；
+2. 现有 privsep `uint64 RequestID` 继续负责 supervisor/worker 帧匹配；P2 新增的独立外部 Reload Request ID 负责 CLI 到最终结果的跨连接关联与恢复。

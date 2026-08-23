@@ -16,9 +16,9 @@ import (
 
 	"github.com/hailinpan/tun-proxy/internal/app"
 	"github.com/hailinpan/tun-proxy/internal/config"
+	"github.com/hailinpan/tun-proxy/internal/control"
 	"github.com/hailinpan/tun-proxy/internal/launchservice"
 	"github.com/hailinpan/tun-proxy/internal/privsep"
-	runtimestatus "github.com/hailinpan/tun-proxy/internal/status"
 	"github.com/hailinpan/tun-proxy/internal/system"
 	"golang.org/x/sys/unix"
 )
@@ -182,7 +182,7 @@ func newServiceReloadFlagSet(output io.Writer, options *serviceReloadOptions) *f
 		options = &serviceReloadOptions{}
 	}
 	flags := newCommandFlagSet("service reload", output)
-	flags.DurationVar(&options.timeout, "timeout", 15*time.Second, "wait `DURATION` for runtime confirmation")
+	flags.DurationVar(&options.timeout, "timeout", 15*time.Second, "wait `DURATION` for the final supervisor/worker result")
 	flags.StringVar(&options.configPath, "config", "", "validate and install configuration `PATH` before reload")
 	flags.BoolVar(&options.useUserConfig, "user-config", false, "reload the invoking user's default configuration")
 	return flags
@@ -232,6 +232,11 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		}
 		configContents = contents
 		expectedDigest = digest
+	} else {
+		_, _, _, expectedDigest, err = loadValidatedConfigSource(manager.Layout.Config)
+		if err != nil {
+			return fmt.Errorf("validate managed configuration before reload: %w", err)
+		}
 	}
 
 	state, err := system.ReadState(manager.Layout.State)
@@ -241,12 +246,11 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		}
 		return fmt.Errorf("read service state before reload: %w", err)
 	}
-	if state.StatusSocket == "" {
-		return errors.New("service state has no runtime status socket")
+	if state.ControlSocket == "" {
+		return errors.New("service state has no supervisor control socket")
 	}
-	before, err := runtimestatus.Query(ctx, state.StatusSocket)
-	if err != nil {
-		return fmt.Errorf("query runtime before reload: %w", err)
+	if state.ControlSocket != manager.Layout.ControlSocket {
+		return fmt.Errorf("service state control socket is %q, want %q", state.ControlSocket, manager.Layout.ControlSocket)
 	}
 
 	var configUpdate *launchservice.ConfigUpdate
@@ -257,15 +261,12 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		}
 	}
 
-	after, reloadErr := requestServiceReload(ctx, manager, state.StatusSocket, before, options.timeout)
-	if reloadErr == nil && expectedDigest != "" && after.ConfigDigest != expectedDigest {
-		reloadErr = fmt.Errorf("runtime acknowledged config digest %q, want %q", after.ConfigDigest, expectedDigest)
-	}
+	response, reloadErr := requestServiceReload(ctx, state.ControlSocket, uint32(manager.OwnerUID), expectedDigest, options.timeout, control.Reload)
 	if reloadErr != nil {
 		if configUpdate == nil {
 			return reloadErr
 		}
-		rollbackErr := rollbackServiceReloadConfig(manager, configUpdate, state.StatusSocket, options.timeout)
+		rollbackErr := rollbackServiceReloadConfig(manager, configUpdate, state.ControlSocket, options.timeout, control.Reload)
 		if rollbackErr != nil {
 			return errors.Join(fmt.Errorf("apply synchronized configuration: %w", reloadErr), rollbackErr)
 		}
@@ -277,7 +278,7 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		}
 		fmt.Printf("managed configuration synchronized: %s\n", manager.Layout.Config)
 	}
-	fmt.Printf("tun-proxy service reloaded config=%s successes=%d failures=%d\n", after.ConfigDigest, after.Reload.Successes, after.Reload.Failures)
+	fmt.Printf("tun-proxy service reloaded config=%s\n", response.ConfigDigest)
 	return nil
 }
 
@@ -291,35 +292,49 @@ func resolveServiceReloadConfigPath(options serviceReloadOptions) (string, error
 	return options.configPath, nil
 }
 
+type serviceControlReload func(context.Context, string, uint32, string) (control.ReloadResponse, error)
+
 func requestServiceReload(
 	ctx context.Context,
-	manager *launchservice.Manager,
 	socket string,
-	before runtimestatus.Snapshot,
+	serverUID uint32,
+	expectedDigest string,
 	timeout time.Duration,
-) (runtimestatus.Snapshot, error) {
-	if err := manager.Reload(ctx); err != nil {
-		return runtimestatus.Snapshot{}, err
+	reload serviceControlReload,
+) (control.ReloadResponse, error) {
+	if reload == nil {
+		return control.ReloadResponse{}, errors.New("service control reload client is required")
 	}
-	return waitForServiceReload(ctx, socket, before, timeout)
+	reloadCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	response, err := reload(reloadCtx, socket, serverUID, expectedDigest)
+	if err != nil {
+		return response, fmt.Errorf("request supervisor reload: %w", err)
+	}
+	return response, nil
+}
+
+type serviceConfigRollback interface {
+	Rollback() error
 }
 
 func rollbackServiceReloadConfig(
 	manager *launchservice.Manager,
-	update *launchservice.ConfigUpdate,
+	update serviceConfigRollback,
 	socket string,
 	timeout time.Duration,
+	reload serviceControlReload,
 ) error {
 	if err := update.Rollback(); err != nil {
 		return fmt.Errorf("roll back managed configuration: %w", err)
 	}
-	recoveryCtx, cancel := context.WithTimeout(context.Background(), timeout+25*time.Second)
-	defer cancel()
-	before, err := runtimestatus.Query(recoveryCtx, socket)
+	_, _, _, rollbackDigest, err := loadValidatedConfigSource(manager.Layout.Config)
 	if err != nil {
-		return fmt.Errorf("query runtime before restoring rolled-back configuration: %w", err)
+		return fmt.Errorf("validate rolled-back managed configuration: %w", err)
 	}
-	if _, err := requestServiceReload(recoveryCtx, manager, socket, before, timeout); err != nil {
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), timeout+5*time.Second)
+	defer cancel()
+	if _, err := requestServiceReload(recoveryCtx, socket, uint32(manager.OwnerUID), rollbackDigest, timeout, reload); err != nil {
 		return fmt.Errorf("restore rolled-back configuration in runtime: %w", err)
 	}
 	return nil
@@ -337,51 +352,6 @@ func validateServiceReloadStatus(status launchservice.Status) error {
 
 func serviceReloadNotRunningError(phase string) error {
 	return fmt.Errorf("tun-proxy service is not running (phase=%q); run %q first", phase, launchservice.StartCommand)
-}
-
-func waitForServiceReload(ctx context.Context, socket string, before runtimestatus.Snapshot, timeout time.Duration) (runtimestatus.Snapshot, error) {
-	return waitForServiceReloadWithQuery(ctx, socket, before, timeout, runtimestatus.Query)
-}
-
-func waitForServiceReloadWithQuery(
-	ctx context.Context,
-	socket string,
-	before runtimestatus.Snapshot,
-	timeout time.Duration,
-	query func(context.Context, string) (runtimestatus.Snapshot, error),
-) (runtimestatus.Snapshot, error) {
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	var lastErr error
-	for {
-		after, err := query(ctx, socket)
-		if err == nil {
-			if after.Reload.Failures > before.Reload.Failures {
-				message := after.Reload.LastError
-				if message == "" {
-					message = "runtime rejected the configuration reload"
-				}
-				return after, errors.New(message)
-			}
-			if after.Reload.Successes > before.Reload.Successes {
-				return after, nil
-			}
-		} else {
-			lastErr = err
-		}
-		select {
-		case <-ctx.Done():
-			return runtimestatus.Snapshot{}, ctx.Err()
-		case <-deadline.C:
-			if lastErr != nil {
-				return runtimestatus.Snapshot{}, fmt.Errorf("reload was not confirmed within %s: %w", timeout, lastErr)
-			}
-			return runtimestatus.Snapshot{}, fmt.Errorf("reload was not confirmed within %s", timeout)
-		case <-ticker.C:
-		}
-	}
 }
 
 type serviceInstallOptions struct {

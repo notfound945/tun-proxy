@@ -137,10 +137,12 @@ readiness-checked start. `sync-user-config` validates the invoking user's
 default configuration and atomically installs it. A stopped service remains
 stopped; a running service is stopped and restarted with readiness checking,
 and startup failure rolls the configuration back before attempting to restore
-the previous service. Reload is reserved for a running service: it signals the
-launchd job with `SIGHUP`, then waits for the worker status socket to increment
-either the success or failure counter; immutable changes return the runtime
-rejection without replacing the active generation.
+the previous service. Reload is reserved for a running service: the CLI sends
+the expected managed-config digest over the root-only supervisor control socket
+and waits for the worker's final result. The status counters remain observable
+but are no longer used to associate the CLI request; `SIGHUP` is only a manual
+compatibility entry point. Immutable changes return the runtime rejection
+without replacing the active generation.
 
 Logs are limited to the fixed managed stdout/stderr paths. The reader rejects
 symlinks and non-regular files, bounds the tail window to 8 MiB, limits the
@@ -149,22 +151,23 @@ following.
 
 ## Acceptance status
 
-As of 2026-08-22, command routing, help topics, configuration validation,
+As of 2026-08-23, command routing, help topics, configuration validation,
 domain-suffix boundaries, offline/pending and resolved explain decisions,
-partial diagnosis, service manager restart/reload signaling, reload success and
-failure confirmation, stopped/running configuration synchronization and restart
-rollback, cleanup recovery safety, log tail edge cases, and symlink rejection
-are covered by automated tests.
+partial diagnosis, service manager restart, root-only control-socket metadata and
+peer checks, expected-digest reload confirmation, worker failure propagation,
+rollback recovery reload, stopped/running configuration synchronization and
+restart rollback, cleanup recovery safety, log tail edge cases, and symlink
+rejection are covered by automated tests.
 
 The remaining root acceptance is intentionally deferred to a maintenance
 window so the currently running managed service is not disturbed:
 
 1. build and install the updated binary transactionally;
 2. verify `service logs` against both managed streams;
-3. apply a mutable configuration change and confirm `service reload` increments
-   the success counter without replacing the worker PID;
-4. inject an immutable change and confirm reload rejection preserves the active
-   configuration;
+3. apply a mutable configuration change and confirm `service reload` returns the
+   matching final control response without replacing the worker PID;
+4. inject an immutable change and confirm the control response reports rejection
+   while preserving the active configuration;
 5. run `service sync-user-config` while stopped and running, verifying the
    stopped-state preservation and readiness-checked PID replacement;
 6. run `service restart` and verify clean PID replacement, readiness, Fake DNS,

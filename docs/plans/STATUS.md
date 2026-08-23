@@ -62,7 +62,10 @@ The CLI is the only planned configuration, diagnostics, and service-management
 interface; no graphical management interface is planned. Managed configuration
 synchronization is separate from hot reload: `service sync-user-config` keeps a
 stopped service stopped or restarts a running service with rollback, while
-`service reload` remains available only to a running service.
+`service reload` remains available only to a running service. Managed reload now
+uses the root-only `/var/run/tun-proxy/control.sock`, sends an expected config
+digest, and waits for the final supervisor/worker result; SIGHUP remains only as
+a manual compatibility entry point.
 
 The one-off Phase 0, 2, 3, 8.6, and 8.7b spike commands were removed after
 production implementation and acceptance. Their historical evidence remains

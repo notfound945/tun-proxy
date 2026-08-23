@@ -29,6 +29,7 @@ type Layout struct {
 	WorkerGroup   string
 	WorkerDir     string
 	StatusSocket  string
+	ControlSocket string
 	DataDir       string
 	State         string
 	Lock          string
@@ -51,6 +52,7 @@ func DefaultLayout() Layout {
 		WorkerGroup:   "_tun-proxy",
 		WorkerDir:     "/var/run/tun-proxy/worker",
 		StatusSocket:  "/var/run/tun-proxy/worker/status.sock",
+		ControlSocket: "/var/run/tun-proxy/control.sock",
 		DataDir:       "/var/lib/tun-proxy",
 		State:         "/var/run/tun-proxy/state.json",
 		Lock:          "/var/run/tun-proxy/tun-proxy.lock",
@@ -75,7 +77,7 @@ func (layout Layout) Validate() error {
 		"log directory": layout.LogDirectory, "stdout": layout.StandardOut,
 		"stderr": layout.StandardErr, "runtime directory": layout.RuntimeDir,
 		"worker runtime directory": layout.WorkerDir, "status socket": layout.StatusSocket,
-		"data directory": layout.DataDir, "state": layout.State, "lock": layout.Lock,
+		"control socket": layout.ControlSocket, "data directory": layout.DataDir, "state": layout.State, "lock": layout.Lock,
 		"service operation lock": layout.OperationLock,
 		"Fake IPv4 persistence":  layout.FakeIPv4, "Fake IPv6 persistence": layout.FakeIPv6,
 	} {
@@ -88,6 +90,12 @@ func (layout Layout) Validate() error {
 	}
 	if len(layout.StatusSocket) > 103 {
 		return fmt.Errorf("service status socket exceeds the macOS path limit: %q", layout.StatusSocket)
+	}
+	if filepath.Dir(layout.ControlSocket) != layout.RuntimeDir {
+		return fmt.Errorf("service control socket must be directly inside runtime directory %q", layout.RuntimeDir)
+	}
+	if len(layout.ControlSocket) > 103 {
+		return fmt.Errorf("service control socket exceeds the macOS path limit: %q", layout.ControlSocket)
 	}
 	return nil
 }

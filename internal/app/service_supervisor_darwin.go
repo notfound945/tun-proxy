@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hailinpan/tun-proxy/internal/config"
+	"github.com/hailinpan/tun-proxy/internal/control"
 	"github.com/hailinpan/tun-proxy/internal/daemon"
 	"github.com/hailinpan/tun-proxy/internal/launchservice"
 	"github.com/hailinpan/tun-proxy/internal/privsep"
@@ -30,6 +31,18 @@ type ServiceSupervisorOptions struct {
 	Reload <-chan struct{}
 	Ready  func(tunName string)
 	Event  func(level, message string)
+}
+
+type supervisorReloadRequest struct {
+	context        context.Context
+	expectedDigest string
+	reply          chan supervisorReloadResult
+}
+
+type supervisorReloadResult struct {
+	digest string
+	err    error
+	fatal  bool
 }
 
 // RunServiceSupervisor is the root half of the managed LaunchDaemon. It owns
@@ -102,6 +115,9 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 	if err := runtimestatus.RemoveStaleForOwners(layout.StatusSocket, 0, identity.UID); err != nil {
 		return fmt.Errorf("remove stale worker status socket: %w", err)
 	}
+	if err := control.RemoveStaleForOwner(layout.ControlSocket, 0); err != nil {
+		return fmt.Errorf("remove stale supervisor control socket: %w", err)
+	}
 	lock, err := daemon.Acquire(layout.Lock)
 	if err != nil {
 		return err
@@ -115,6 +131,7 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 	var handoff *privsep.Handoff
 	var command *exec.Cmd
 	var session *privsep.SupervisorSession
+	var controlServer *control.Server
 	workerStarted := false
 	workerRunning := false
 
@@ -126,6 +143,18 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 			state.Phase = "stopping"
 			if err := system.WriteState(layout.State, state); err != nil {
 				failures = append(failures, fmt.Errorf("persist stopping state: %w", err))
+			}
+		}
+		if controlServer != nil {
+			if err := controlServer.Close(cleanupCtx); err != nil {
+				failures = append(failures, fmt.Errorf("close supervisor control socket: %w", err))
+			} else {
+				state.ControlSocket = ""
+				if stateExists {
+					if err := system.WriteState(layout.State, state); err != nil {
+						failures = append(failures, fmt.Errorf("persist control socket cleanup: %w", err))
+					}
+				}
 			}
 		}
 		// Restore host DNS and remove routes while the worker still serves DNS
@@ -285,7 +314,27 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 		return finish(err)
 	}
 	workerRunning = true
+	reloadRequests := make(chan supervisorReloadRequest)
+	controlServer, err = control.Start(layout.ControlSocket, 0, func(requestCtx context.Context, expectedDigest string) (string, error) {
+		reply := make(chan supervisorReloadResult)
+		request := supervisorReloadRequest{context: requestCtx, expectedDigest: expectedDigest, reply: reply}
+		select {
+		case reloadRequests <- request:
+		case <-requestCtx.Done():
+			return "", requestCtx.Err()
+		}
+		select {
+		case result := <-reply:
+			return result.digest, result.err
+		case <-requestCtx.Done():
+			return "", requestCtx.Err()
+		}
+	})
+	if err != nil {
+		return finish(fmt.Errorf("start supervisor control socket: %w", err))
+	}
 	state.StatusSocket = layout.StatusSocket
+	state.ControlSocket = layout.ControlSocket
 	state.Phase = "running"
 	if err := system.WriteState(layout.State, state); err != nil {
 		return finish(err)
@@ -296,6 +345,56 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 	networkTicker := time.NewTicker(runtimeNetworkPoll)
 	defer networkTicker.Stop()
 	networkState := newNetworkRefreshState(networkFingerprint(effectiveRuntime))
+
+	performReload := func(requestCtx context.Context, expectedDigest string) supervisorReloadResult {
+		nextBytes, next, nextDigest, reloadErr := loadManagedServiceConfig(configPath, layout)
+		if reloadErr == nil {
+			reloadErr = validateExpectedReloadDigest(nextDigest, expectedDigest)
+		}
+		if reloadErr == nil {
+			reloadErr = PreflightReload(requestCtx, runtime, next)
+		}
+		var nextInterfaceServers interfaceDNS
+		var nextEffective *config.Config
+		if reloadErr == nil {
+			nextInterfaceServers, reloadErr = discoverInterfaceDNS(requestCtx, next, runner)
+			nextEffective = runtimeWithInterfaceDNS(next, nextInterfaceServers)
+		}
+		if reloadErr == nil && next.Capture.DefaultRoute {
+			nextPlan, planErr := planDefaultRouteCaptureOwned(requestCtx, nextEffective, ipv6Enabled, system.LookupRouteScoped, system.LookupDefaultRouteScoped, defaultRoutes.Bypasses)
+			if planErr != nil || !defaultRoutes.equal(nextPlan) {
+				reloadErr = fmt.Errorf("reloaded default-route bypass topology differs from installed routes: %w", errors.Join(planErr, errors.New("restart is required to rebuild bypass routes")))
+			}
+		}
+		if reloadErr == nil {
+			reloadCtx, cancel := context.WithTimeout(requestCtx, serviceSupervisorTimeout)
+			reloadErr = session.Reload(reloadCtx, privsep.Reload{
+				Config: nextBytes, ConfigDigest: nextDigest, InterfaceDNS: nextInterfaceServers,
+			})
+			cancel()
+		}
+		if reloadErr != nil {
+			return supervisorReloadResult{err: reloadErr}
+		}
+		previousDigest := state.ConfigDigest
+		state.ConfigDigest = nextDigest
+		if reloadErr := system.WriteState(layout.State, state); reloadErr != nil {
+			state.ConfigDigest = previousDigest
+			reloadErr = fmt.Errorf("configuration reload activated but state update failed: %w", reloadErr)
+			return supervisorReloadResult{err: reloadErr, fatal: true}
+		}
+		runtime = next
+		effectiveRuntime = nextEffective
+		interfaceServers = nextInterfaceServers
+		configBytes = nextBytes
+		digest = nextDigest
+		for _, message := range effectiveDNSMessages(runtime, interfaceServers) {
+			emitServiceSupervisorEvent(options, "info", message)
+		}
+		networkState.reset(networkFingerprint(effectiveRuntime))
+		emitServiceSupervisorEvent(options, "info", "configuration reloaded")
+		return supervisorReloadResult{digest: nextDigest}
+	}
 
 	for {
 		select {
@@ -308,50 +407,26 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 			}
 			workerRunning = false
 			return finish(fmt.Errorf("service worker exited: %w", exitErr))
+		case request := <-reloadRequests:
+			result := performReload(request.context, request.expectedDigest)
+			select {
+			case request.reply <- result:
+			case <-request.context.Done():
+			}
+			if result.err != nil {
+				emitServiceSupervisorEvent(options, "warn", "configuration reload rejected: "+result.err.Error())
+			}
+			if result.fatal {
+				return finish(result.err)
+			}
 		case <-options.Reload:
-			nextBytes, next, nextDigest, err := loadManagedServiceConfig(configPath, layout)
-			if err == nil {
-				err = PreflightReload(ctx, runtime, next)
+			result := performReload(ctx, "")
+			if result.err != nil {
+				emitServiceSupervisorEvent(options, "warn", "configuration reload rejected: "+result.err.Error())
 			}
-			var nextInterfaceServers interfaceDNS
-			var nextEffective *config.Config
-			if err == nil {
-				nextInterfaceServers, err = discoverInterfaceDNS(ctx, next, runner)
-				nextEffective = runtimeWithInterfaceDNS(next, nextInterfaceServers)
+			if result.fatal {
+				return finish(result.err)
 			}
-			if err == nil && next.Capture.DefaultRoute {
-				nextPlan, planErr := planDefaultRouteCaptureOwned(ctx, nextEffective, ipv6Enabled, system.LookupRouteScoped, system.LookupDefaultRouteScoped, defaultRoutes.Bypasses)
-				if planErr != nil || !defaultRoutes.equal(nextPlan) {
-					err = fmt.Errorf("reloaded default-route bypass topology differs from installed routes: %w", errors.Join(planErr, errors.New("restart is required to rebuild bypass routes")))
-				}
-			}
-			if err == nil {
-				reloadCtx, cancel := context.WithTimeout(ctx, serviceSupervisorTimeout)
-				err = session.Reload(reloadCtx, privsep.Reload{
-					Config: nextBytes, ConfigDigest: nextDigest, InterfaceDNS: nextInterfaceServers,
-				})
-				cancel()
-			}
-			if err != nil {
-				emitServiceSupervisorEvent(options, "warn", "configuration reload rejected: "+err.Error())
-				continue
-			}
-			previousDigest := state.ConfigDigest
-			state.ConfigDigest = nextDigest
-			if err := system.WriteState(layout.State, state); err != nil {
-				state.ConfigDigest = previousDigest
-				return finish(fmt.Errorf("configuration reload activated but state update failed: %w", err))
-			}
-			runtime = next
-			effectiveRuntime = nextEffective
-			interfaceServers = nextInterfaceServers
-			configBytes = nextBytes
-			digest = nextDigest
-			for _, message := range effectiveDNSMessages(runtime, interfaceServers) {
-				emitServiceSupervisorEvent(options, "info", message)
-			}
-			networkState.reset(networkFingerprint(effectiveRuntime))
-			emitServiceSupervisorEvent(options, "info", "configuration reloaded")
 		case tick := <-networkTicker.C:
 			nextInterfaceServers, err := discoverInterfaceDNS(ctx, runtime, runner)
 			if err != nil {
@@ -395,6 +470,13 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 			networkState.succeeded(fingerprint)
 		}
 	}
+}
+
+func validateExpectedReloadDigest(actual, expected string) error {
+	if expected != "" && actual != expected {
+		return fmt.Errorf("managed configuration digest %q does not match requested digest %q", actual, expected)
+	}
+	return nil
 }
 
 func loadManagedServiceConfig(path string, layout launchservice.Layout) ([]byte, *config.Config, string, error) {

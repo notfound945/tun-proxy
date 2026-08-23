@@ -95,10 +95,13 @@ managed configuration, so default uninstall remains directly reinstallable.
 
 ## Local authorization boundary
 
-There is no new mutable control socket in Phase 8.7a. Lifecycle commands
-require effective UID 0 and operate on the launchd system domain. Runtime
-status continues to use the existing root-owned local status socket. This is a
-local administrative boundary, not a least-privilege process boundary.
+There was no new mutable control socket in the historical Phase 8.7a slice.
+Lifecycle commands required effective UID 0 and operated on the launchd system
+domain. Runtime status used the existing local status socket. The later
+production control plane adds `/var/run/tun-proxy/control.sock` under the root
+supervisor: it is root-owned, mode `0600`, verifies the peer EUID is 0, and
+returns the final worker reload result. The worker status socket remains a
+read-only observability path rather than a reload acknowledgement channel.
 
 Process-rule configuration also remains unsupported. Moving the Phase 8.6
 `libproc` polling probe into a root daemon would not recover an exited
