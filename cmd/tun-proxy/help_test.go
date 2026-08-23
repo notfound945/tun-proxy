@@ -12,7 +12,7 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 	var output bytes.Buffer
 	fprintUsage(&output, nil)
 	for _, command := range []string{
-		"config [options|command]", "explain", "diagnose", "service <command>",
+		"config [options|command]", "explain", "diagnose", "self-update", "service <command>",
 	} {
 		if !strings.Contains(output.String(), command) {
 			t.Fatalf("top-level help missing %q:\n%s", command, output.String())
@@ -23,6 +23,9 @@ func TestHelpContainsOperationalCommands(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "-version") {
 		t.Fatalf("top-level help missing version flag:\n%s", output.String())
+	}
+	if usage := renderedUsage("self-update"); !strings.Contains(usage, releaseUpdateScriptURL) {
+		t.Fatalf("self-update help missing update script URL: %s", usage)
 	}
 	if usage := renderedUsage("cleanup"); !strings.Contains(usage, "-timeout DURATION") {
 		t.Fatalf("cleanup help missing timeout flag: %s", usage)

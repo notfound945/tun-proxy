@@ -411,6 +411,15 @@ curl -fsSL \
   bash -s -- v1.2.3
 ```
 
+已安装的 CLI 也提供等价的最新 Release 更新入口：
+
+```sh
+tun-proxy self-update
+```
+
+该命令会下载同一个 `update-release.sh` 并通过 Bash 执行；必须以普通用户运行，不能在
+整个命令前添加 `sudo`。
+
 在仓库源码目录内开发或测试脚本时，也可以直接运行
 `./scripts/update-release.sh [version-or-archive]`。
 

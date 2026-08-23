@@ -79,6 +79,8 @@ func runWithVersionOutput(args []string, versionOutput io.Writer) error {
 		return statusCommand(args[1:])
 	case "cleanup":
 		return cleanupCommand(args[1:])
+	case "self-update":
+		return selfUpdateCommand(args[1:])
 	case "service":
 		return serviceCommand(args[1:])
 	case "_service-run":

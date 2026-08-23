@@ -33,6 +33,7 @@
 | `run` | 在前台运行代理 | 需要 |
 | `status` | 读取运行状态和指标 | 查询托管服务时通常需要 |
 | `cleanup` | 恢复已记录的系统状态 | 需要 |
+| `self-update` | 从 GitHub 下载并安装最新 Release | 不需要；必须以普通用户运行 |
 | `service ...` | 管理 LaunchDaemon | 需要 |
 | `version` / `-version` / `--version` | 输出构建信息 | 不需要 |
 | `help ...` | 显示内置命令帮助 | 不需要 |
@@ -49,6 +50,28 @@ tun-proxy --version
 
 输出包含版本号、Commit 和构建时间。`make build` 生成的开发版本号为 `local`；
 `make build-release` 会先运行 `golangci-lint`，再从当前 annotated SemVer tag 注入发布版本号。
+
+## Release 自动更新
+
+```sh
+tun-proxy self-update
+```
+
+命令会使用 `/usr/bin/curl -fsSL` 下载仓库 `master` 分支中的
+`scripts/update-release.sh`，确认下载成功且内容非空后交给 `/bin/bash` 执行，其更新效果与：
+
+```sh
+curl -fsSL \
+  https://raw.githubusercontent.com/notfound945/tun-proxy/master/scripts/update-release.sh | bash
+```
+
+一致。必须以普通用户运行，不要使用 `sudo tun-proxy self-update`；更新脚本会在替换
+`/usr/local/bin/tun-proxy` 或托管服务文件时自行请求权限。`UPDATE_SERVICE_CONFIG`、
+`START_SERVICE`、`PREFIX` 等更新脚本环境变量会原样继承，例如：
+
+```sh
+START_SERVICE=1 tun-proxy self-update
+```
 
 ## 全局帮助
 

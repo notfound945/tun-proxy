@@ -45,6 +45,14 @@ curl -fsSL \
   https://raw.githubusercontent.com/notfound945/tun-proxy/master/scripts/update-release.sh | bash
 ```
 
+也可以通过已安装的 CLI 启动同一更新流程：
+
+```bash
+tun-proxy self-update
+```
+
+请以普通用户运行，不要在整个命令前添加 `sudo`；更新脚本只会在替换系统文件时自行请求权限。
+
 更新到指定版本或使用本地 Release 压缩包：
 
 ```bash

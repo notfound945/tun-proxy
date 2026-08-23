@@ -67,6 +67,7 @@ commands:
   run [options]               run in the foreground
   status [options]            inspect recovery state and runtime metrics
   cleanup [options]           safely restore recorded system state
+  self-update                 download and install the latest GitHub Release
   service <command>           manage the LaunchDaemon
   version                     print build version (also: -version, --version)
   help [command]              show command-specific help
@@ -138,6 +139,14 @@ It requires a live status socket and can be combined with -json.
 share one instance-lock guard. DNS clearing only resets services whose complete
 DNS list still equals the configured local listener; Fake IP clearing removes
 configured IPv4/IPv6 snapshots and WALs.
+`,
+	"self-update": `usage: tun-proxy self-update
+
+Downloads the release updater from:
+  https://raw.githubusercontent.com/notfound945/tun-proxy/master/scripts/update-release.sh
+and executes it with /bin/bash. This is the same update flow documented for
+"curl -fsSL .../scripts/update-release.sh | bash". Run it as a normal user,
+not through sudo; the updater requests privilege only for files that require it.
 `,
 	"service": `usage: tun-proxy service <command> [options]
 
