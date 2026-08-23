@@ -66,8 +66,12 @@ func TestWithGlobalJSONAlias(t *testing.T) {
 func TestExecuteCLIJSONFailureIsSingleDocument(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := executeCLIWithRunner([]string{"--output=json", "service", "reload"}, &stdout, &stderr, func(args []string) error {
-		fmt.Fprintln(os.Stdout, "partial command output")
-		fmt.Fprintln(os.Stderr, "partial diagnostic")
+		if _, err := fmt.Fprintln(os.Stdout, "partial command output"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintln(os.Stderr, "partial diagnostic"); err != nil {
+			t.Fatal(err)
+		}
 		return apperror.New(apperror.CodeReloadTimeout, "service.reload", "reload timed out")
 	})
 	if code != 6 {
@@ -99,7 +103,9 @@ func TestExecuteCLIJSONSuccessUsesExistingJSONCommand(t *testing.T) {
 		if !reflect.DeepEqual(args, want) {
 			t.Fatalf("args = %#v, want %#v", args, want)
 		}
-		fmt.Fprintln(os.Stdout, `{"installed":true}`)
+		if _, err := fmt.Fprintln(os.Stdout, `{"installed":true}`); err != nil {
+			t.Fatal(err)
+		}
 		return nil
 	})
 	if code != 0 || stderr.Len() != 0 || strings.TrimSpace(stdout.String()) != `{"installed":true}` {
@@ -110,8 +116,12 @@ func TestExecuteCLIJSONSuccessUsesExistingJSONCommand(t *testing.T) {
 func TestExecuteCLIJSONWrapsTextSuccessAndDiagnostics(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := executeCLIWithRunner([]string{"--output=json", "version"}, &stdout, &stderr, func(args []string) error {
-		fmt.Fprintln(os.Stdout, "tun-proxy test")
-		fmt.Fprintln(os.Stderr, "warning")
+		if _, err := fmt.Fprintln(os.Stdout, "tun-proxy test"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintln(os.Stderr, "warning"); err != nil {
+			t.Fatal(err)
+		}
 		return nil
 	})
 	if code != 0 || stderr.Len() != 0 {

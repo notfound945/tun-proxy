@@ -191,11 +191,11 @@ func renderCLIError(mode outputMode, err error, stdout, stderr io.Writer) {
 		_ = encoder.Encode(apperror.EnvelopeOf(err))
 		return
 	}
-	fmt.Fprintln(stderr, "error:", err)
+	_, _ = fmt.Fprintln(stderr, "error:", err)
 	info := apperror.InfoOf(err)
 	for _, key := range []string{"holder_operation", "holder_operation_id", "holder_pid", "started_at", "operation_id", "reload_request_id", "rollback_of", "phase"} {
 		if value, ok := info.Details[key]; ok {
-			fmt.Fprintf(stderr, "  %s: %v\n", strings.ReplaceAll(key, "_", "-"), value)
+			_, _ = fmt.Fprintf(stderr, "  %s: %v\n", strings.ReplaceAll(key, "_", "-"), value)
 		}
 	}
 }
