@@ -70,8 +70,10 @@ bounded cached result; rollback uses a new ID with `rollback_of`. Control and
 privsep protocol v3 now carry stable structured errors end to end. The CLI
 supports global `--output=text|json`, emits one JSON error document without
 stderr contamination, maps exact `error.code` values to coarse exit codes, and
-records reload `LastErrorCode` in runtime status. SIGHUP remains a manual
-compatibility entry point and generates its own correlation IDs.
+records reload `LastErrorCode` in runtime status. `status -fake-ip` provides an
+explicit opt-in view of live IPv4/IPv6 Fake IP mappings without burdening normal
+status requests. SIGHUP remains a manual compatibility entry point and
+generates its own correlation IDs.
 
 The one-off Phase 0, 2, 3, 8.6, and 8.7b spike commands were removed after
 production implementation and acceptance. Their historical evidence remains

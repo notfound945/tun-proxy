@@ -171,7 +171,7 @@ Operation ID 使用 `crypto/rand` 生成 128 bit 随机值，并编码为 32 位
 
 ```text
 internal/launchservice/operation_lock_darwin.go
-internal/launchservice/operation_lock_test.go
+internal/launchservice/operation_lock_darwin_test.go
 ```
 
 API 可以设计为：
@@ -847,7 +847,7 @@ func main() {
 ```text
 internal/launchservice/layout.go
 internal/launchservice/operation_lock_darwin.go
-internal/launchservice/operation_lock_test.go
+internal/launchservice/operation_lock_darwin_test.go
 internal/launchservice/manager.go
 cmd/tun-proxy/service.go
 cmd/tun-proxy/main.go

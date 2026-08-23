@@ -162,6 +162,11 @@ sudo tun-proxy service logs -follow
 sudo tun-proxy status -fake-ip
 ```
 
+`status -fake-ip` 会按需从正在运行的 status socket 读取 IPv4/IPv6 Fake IP 映射；普通
+`status` 不会请求完整映射列表。需要机器可读结果时可使用
+`tun-proxy --output=json status -fake-ip`，映射位于
+`fake_ip_mappings.ipv4` 和 `fake_ip_mappings.ipv6`。
+
 `service stop` 会禁用并卸载 launchd job，避免 `KeepAlive` 在停止后继续重启进程；安装文件和
 配置仍会保留，执行 `service start` 即可重新 enable、bootstrap 并启动。日志文件不会因停止而
 清空，但停止成功后不应继续产生新的服务日志。

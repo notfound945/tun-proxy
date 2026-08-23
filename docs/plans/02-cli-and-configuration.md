@@ -37,12 +37,16 @@ tun-proxy version
 sudo tun-proxy check -config ./config.yaml
 sudo tun-proxy run -config ./config.yaml
 sudo tun-proxy status
+sudo tun-proxy status -fake-ip
 sudo tun-proxy cleanup
 sudo tun-proxy cleanup -clear-dns -config ./config.yaml
 sudo tun-proxy cleanup -clear-fake-ip -config ./config.yaml
 ```
 
 前台 `run` 由一个 root 进程持有系统事务和数据面。程序通过文件锁保证单实例运行。
+普通 `status` 读取运行状态和汇总指标；`status -fake-ip` 才会按需通过 status socket 请求实时
+IPv4/IPv6 Fake IP 映射，避免日常查询复制可能较大的映射列表。JSON 模式下映射位于
+`fake_ip_mappings.ipv4` 和 `fake_ip_mappings.ipv6`。
 普通 `cleanup` 只恢复状态日志明确记录、且当前值仍归本程序所有的路由和 DNS 修改。
 状态文件丢失时，`-clear-dns` 可以保守地把完整 DNS 列表仍恰好等于配置中
 `dns.listen` 地址的已启用网络服务重置为自动/DHCP DNS；`-clear-fake-ip` 用于删除配置

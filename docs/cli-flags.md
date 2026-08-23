@@ -31,7 +31,7 @@ sudo tun-proxy --output=json service reload -user-config
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--output=text\|json` | `text` | 选择面向用户的文本输出或面向自动化的 JSON 输出。 |
+| `--output=text\|json` | `text` | 选择面向用户的文本输出或面向自动化的 JSON 输出；兼容 `-output=text\|json`。 |
 
 JSON 失败时 stdout 只输出一个合法 document，stderr 为空；精确错误类型读取
 `error.code`，退出码只用于粗粒度分类。失败 envelope 包含 `operation`、`message`、
@@ -51,7 +51,7 @@ JSON 查询命令直接返回其原生 JSON，其他成功命令则包装为 `{"
 | `explain` | 解释模拟流量的策略选择 | 通常不需要；访问受保护资源时除外 |
 | `diagnose` | 收集只读健康报告 | 可选；使用 `sudo` 可读取完整托管运行数据 |
 | `run` | 在前台运行代理 | 需要 |
-| `status` | 读取运行状态和指标 | 查询托管服务时通常需要 |
+| `status` | 读取运行状态、指标及可选 Fake IP 映射 | 查询托管服务时通常需要 |
 | `cleanup` | 恢复已记录的系统状态 | 需要 |
 | `self-update` | 从 GitHub 下载并安装最新 Release | 不需要；必须以普通用户运行 |
 | `service ...` | 管理 LaunchDaemon | 需要 |

@@ -110,6 +110,21 @@ and `/etc/hosts` entries that would bypass Fake DNS policy. Domain suffixes use
 DNS label boundaries: `cursor.sh` and `api.cursor.sh` match `cursor.sh`, while
 `not-cursor.sh` does not.
 
+### Runtime status and Fake IP mappings
+
+```sh
+sudo tun-proxy status
+sudo tun-proxy status -fake-ip
+sudo tun-proxy --output=json status -fake-ip
+```
+
+Normal status requests return runtime counters without copying the complete
+mapping table. `-fake-ip` explicitly requests live IPv4 and IPv6 Fake IP
+mappings from the running worker; JSON output exposes them as
+`fake_ip_mappings.ipv4` and `fake_ip_mappings.ipv6`. The command fails when no
+live status socket is available instead of presenting persisted snapshots as
+current runtime state.
+
 ### Cleanup recovery
 
 ```sh

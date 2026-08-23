@@ -349,6 +349,12 @@ sudo tun-proxy status -fake-ip
 sudo tun-proxy diagnose
 ```
 
+`status -fake-ip` 会额外读取运行中 worker 的 IPv4/IPv6 Fake IP 映射。普通 `status` 只读取
+汇总指标，不请求可能较大的映射列表；JSON 输出可使用
+`sudo tun-proxy --output=json status -fake-ip`，映射位于
+`fake_ip_mappings.ipv4` 和 `fake_ip_mappings.ipv6`。服务未运行或 status socket 不可用时，
+该 flag 会返回错误，而不会改读磁盘快照冒充实时数据。
+
 常用服务命令：
 
 ```sh
