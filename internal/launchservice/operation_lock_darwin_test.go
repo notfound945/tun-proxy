@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -199,6 +200,57 @@ func TestOperationLockRejectsUnsafeFiles(t *testing.T) {
 			_, err := operationLockTestManager(layout).BeginOperation(context.Background(), OperationSpec{Kind: OperationInstall})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("BeginOperation() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateOperationLockParentAllowsDefaultDarwinRunDirectory(t *testing.T) {
+	if err := validateOperationLockParent(defaultOperationLockPath, 0); err != nil {
+		t.Fatalf("validateOperationLockParent(%q) = %v", defaultOperationLockPath, err)
+	}
+}
+
+func TestValidateOperationLockParentRejectsWritableCustomDirectory(t *testing.T) {
+	for _, mode := range []os.FileMode{0o775, 0o777} {
+		t.Run(mode.String(), func(t *testing.T) {
+			root := shortOperationLockRoot(t)
+			if err := os.Chmod(root, mode); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "service-operation.lock")
+			err := validateOperationLockParent(path, os.Geteuid())
+			if err == nil || !strings.Contains(err.Error(), "refuse writable") {
+				t.Fatalf("validateOperationLockParent() error = %v, want writable-directory rejection", err)
+			}
+		})
+	}
+}
+
+func TestSafeDefaultOperationLockParentIsStrictlyScoped(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		ownerUID int
+		mode     os.FileMode
+		uid      uint32
+		gid      uint32
+		want     bool
+	}{
+		{name: "standard macOS run directory", path: defaultOperationLockPath, ownerUID: 0, mode: 0o775, uid: 0, gid: 1, want: true},
+		{name: "custom path", path: "/var/run/custom.service-operation.lock", ownerUID: 0, mode: 0o775, uid: 0, gid: 1},
+		{name: "non-root expected owner", path: defaultOperationLockPath, ownerUID: 501, mode: 0o775, uid: 0, gid: 1},
+		{name: "non-root directory owner", path: defaultOperationLockPath, ownerUID: 0, mode: 0o775, uid: 501, gid: 1},
+		{name: "unexpected group", path: defaultOperationLockPath, ownerUID: 0, mode: 0o775, uid: 0, gid: 20},
+		{name: "world writable", path: defaultOperationLockPath, ownerUID: 0, mode: 0o777, uid: 0, gid: 1},
+		{name: "unexpected group writable mode", path: defaultOperationLockPath, ownerUID: 0, mode: 0o770, uid: 0, gid: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stat := &syscall.Stat_t{Uid: test.uid, Gid: test.gid}
+			got := isSafeDefaultOperationLockParent(test.path, test.ownerUID, test.mode, stat)
+			if got != test.want {
+				t.Fatalf("isSafeDefaultOperationLockParent() = %t, want %t", got, test.want)
 			}
 		})
 	}

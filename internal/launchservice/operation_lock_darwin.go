@@ -175,10 +175,25 @@ func validateOperationLockParent(path string, ownerUID int) error {
 	if stat.Uid != uint32(ownerUID) {
 		return fmt.Errorf("refuse service operation lock directory %q owned by UID %d, want %d", parent, stat.Uid, ownerUID)
 	}
-	if info.Mode().Perm()&0o022 != 0 {
+	if info.Mode().Perm()&0o022 != 0 && !isSafeDefaultOperationLockParent(path, ownerUID, info.Mode().Perm(), stat) {
 		return fmt.Errorf("refuse writable service operation lock directory %q with mode %04o", parent, info.Mode().Perm())
 	}
 	return nil
+}
+
+// isSafeDefaultOperationLockParent permits the standard macOS /var/run layout,
+// which is root:daemon 0775 on supported systems. The exception is deliberately
+// limited to the fixed default lock path; custom group-writable directories
+// remain unsafe even when they have the same ownership and mode.
+func isSafeDefaultOperationLockParent(path string, ownerUID int, mode os.FileMode, stat *syscall.Stat_t) bool {
+	const darwinDaemonGID = 1
+
+	return path == defaultOperationLockPath &&
+		filepath.Dir(path) == "/var/run" &&
+		ownerUID == 0 &&
+		stat.Uid == 0 &&
+		stat.Gid == darwinDaemonGID &&
+		mode.Perm() == 0o775
 }
 
 func validateOperationLockFile(path string, file *os.File, ownerUID int) error {

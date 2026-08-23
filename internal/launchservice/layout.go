@@ -14,7 +14,10 @@ import (
 	"github.com/hailinpan/tun-proxy/internal/config"
 )
 
-const Label = "cn.notfound945.tun-proxy"
+const (
+	Label                    = "cn.notfound945.tun-proxy"
+	defaultOperationLockPath = "/var/run/tun-proxy.service-operation.lock"
+)
 
 type Layout struct {
 	Label         string
@@ -56,7 +59,7 @@ func DefaultLayout() Layout {
 		DataDir:       "/var/lib/tun-proxy",
 		State:         "/var/run/tun-proxy/state.json",
 		Lock:          "/var/run/tun-proxy/tun-proxy.lock",
-		OperationLock: "/var/run/tun-proxy.service-operation.lock",
+		OperationLock: defaultOperationLockPath,
 		FakeIPv4:      "/var/lib/tun-proxy/fake-ip.yaml",
 		FakeIPv6:      "/var/lib/tun-proxy/fake-ipv6.yaml",
 	}
