@@ -88,7 +88,7 @@ func TestServeWorkerStartupReloadAndShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requestID != 7 || reloadResult.ConfigDigest != reloadDigest || reloadResult.Error != "" {
+	if requestID != 7 || reloadResult.ConfigDigest != reloadDigest || reloadResult.Error != nil {
 		t.Fatalf("reload result id=%d payload=%+v", requestID, reloadResult)
 	}
 	if err := codec.Send(KindShutdown, 8, Shutdown{Reason: "test complete"}); err != nil {

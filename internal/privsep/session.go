@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 )
 
 const workerCloseTimeout = 10 * time.Second
@@ -127,7 +129,12 @@ func ServeWorker(ctx context.Context, control io.ReadWriter, runtime WorkerRunti
 				result := ReloadResult{ReloadRequestID: reload.ReloadRequestID, ConfigDigest: reload.ConfigDigest}
 				if decodeErr != nil {
 					result.ConfigDigest = ""
-					result.Error = decodeErr.Error()
+					var typed *apperror.Error
+					if !errors.As(decodeErr, &typed) || typed == nil {
+						decodeErr = apperror.Wrap(apperror.CodeReloadRejected, "service.reload", "worker rejected configuration reload", decodeErr)
+					}
+					info := apperror.InfoOf(decodeErr)
+					result.Error = &info
 				}
 				if err := codec.Send(KindReloadResult, item.message.RequestID, result); err != nil {
 					return err

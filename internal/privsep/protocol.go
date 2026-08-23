@@ -15,10 +15,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 )
 
 const (
-	ProtocolVersion  = 2
+	ProtocolVersion  = 3
 	MaxConfigSize    = 1 << 20
 	maxFrameSize     = 2 << 20
 	maxDNSInterfaces = 32
@@ -179,10 +181,9 @@ func validateInterfaceDNS(configured map[string][]netip.AddrPort) error {
 }
 
 type ReloadResult struct {
-	ReloadRequestID string `json:"reload_request_id"`
-	ConfigDigest    string `json:"config_digest,omitempty"`
-	ErrorCode       string `json:"error_code,omitempty"`
-	Error           string `json:"error,omitempty"`
+	ReloadRequestID string              `json:"reload_request_id"`
+	ConfigDigest    string              `json:"config_digest,omitempty"`
+	Error           *apperror.ErrorInfo `json:"error,omitempty"`
 }
 
 func (result ReloadResult) Validate() error {
@@ -190,15 +191,17 @@ func (result ReloadResult) Validate() error {
 	if err := validateExternalRequestID(result.ReloadRequestID); err != nil {
 		failures = append(failures, err)
 	}
-	if result.Error == "" {
+	if result.Error == nil {
 		if err := validateDigest(result.ConfigDigest); err != nil {
 			failures = append(failures, err)
 		}
-		if result.ErrorCode != "" {
-			failures = append(failures, errors.New("successful reload result must not include an error code"))
+	} else {
+		if result.ConfigDigest != "" {
+			failures = append(failures, errors.New("failed reload result must not include a config digest"))
 		}
-	} else if result.ConfigDigest != "" {
-		failures = append(failures, errors.New("failed reload result must not include a config digest"))
+		if err := apperror.ValidateInfo(*result.Error); err != nil {
+			failures = append(failures, fmt.Errorf("reload result error is invalid: %w", err))
+		}
 	}
 	return errors.Join(failures...)
 }

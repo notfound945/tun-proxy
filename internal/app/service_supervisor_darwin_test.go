@@ -4,11 +4,14 @@ package app
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"github.com/hailinpan/tun-proxy/internal/config"
 	"github.com/hailinpan/tun-proxy/internal/launchservice"
 	"github.com/hailinpan/tun-proxy/internal/privsep"
@@ -167,8 +170,28 @@ func TestValidateExpectedReloadDigest(t *testing.T) {
 	if err := validateExpectedReloadDigest(actual, actual); err != nil {
 		t.Fatalf("matching control digest validation = %v", err)
 	}
-	if err := validateExpectedReloadDigest(actual, "sha256:expected"); err == nil || !strings.Contains(err.Error(), "does not match requested digest") {
-		t.Fatalf("mismatched control digest error = %v", err)
+	if err := validateExpectedReloadDigest(actual, "sha256:expected"); err == nil || apperror.CodeOf(err) != apperror.CodeReloadDigestMismatch {
+		t.Fatalf("mismatched control digest error = %v, code=%s", err, apperror.CodeOf(err))
+	}
+}
+
+func TestAnnotateSupervisorReloadErrorAddsCorrelationDetails(t *testing.T) {
+	request := supervisorReloadRequest{
+		context: context.Background(), requestID: "0123456789abcdef0123456789abcdef",
+		operationID: "fedcba9876543210fedcba9876543210", rollbackOf: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	err := annotateSupervisorReloadError(errors.New("resolver failed"), request, "apply")
+	info := apperror.InfoOf(err)
+	if info.Code != apperror.CodeReloadRejected || info.Details["reload_request_id"] != request.requestID || info.Details["operation_id"] != request.operationID || info.Details["rollback_of"] != request.rollbackOf || info.Details["phase"] != "apply" {
+		t.Fatalf("structured reload error = %+v", info)
+	}
+}
+
+func TestAnnotateSupervisorReloadDeadline(t *testing.T) {
+	request := supervisorReloadRequest{context: context.Background(), requestID: "0123456789abcdef0123456789abcdef"}
+	err := annotateSupervisorReloadError(context.DeadlineExceeded, request, "apply")
+	if got := apperror.CodeOf(err); got != apperror.CodeReloadTimeout {
+		t.Fatalf("deadline code = %s", got)
 	}
 }
 
@@ -182,5 +205,17 @@ func TestNewSupervisorReloadRequestGeneratesExternalIDs(t *testing.T) {
 	}
 	if request.expectedDigest != "sha256:test" || request.context != t.Context() {
 		t.Fatalf("request = %+v", request)
+	}
+}
+
+func TestAnnotateSupervisorReloadErrorPreservesTypedInternalError(t *testing.T) {
+	request := supervisorReloadRequest{context: context.Background(), requestID: "0123456789abcdef0123456789abcdef"}
+	err := annotateSupervisorReloadError(
+		apperror.New(apperror.CodeInternalError, "service.reload", "state persistence failed"),
+		request,
+		"persist",
+	)
+	if got := apperror.CodeOf(err); got != apperror.CodeInternalError {
+		t.Fatalf("internal error code = %s", got)
 	}
 }

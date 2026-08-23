@@ -32,17 +32,7 @@ var (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return
-		}
-		if isManagedServiceProcess(os.Args[1:]) {
-			writeManagedServiceLog(os.Stderr, time.Now(), "ERROR "+err.Error())
-		} else {
-			fmt.Fprintln(os.Stderr, "error:", err)
-		}
-		os.Exit(1)
-	}
+	os.Exit(executeCLI(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func isManagedServiceProcess(args []string) bool {

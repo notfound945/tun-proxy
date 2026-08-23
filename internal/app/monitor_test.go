@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"github.com/hailinpan/tun-proxy/internal/config"
 )
 
@@ -42,5 +43,17 @@ func TestRunMonitorRecordsReloadRequestResult(t *testing.T) {
 	}
 	if snapshot.ConfigDigest != "sha256:new" {
 		t.Fatalf("config digest = %q", snapshot.ConfigDigest)
+	}
+}
+
+func TestRunMonitorRecordsStructuredReloadFailureCode(t *testing.T) {
+	runtime := &config.Config{FakeIP: config.FakeIP{MaxMappings: 1}}
+	monitor := newRunMonitor(time.Now(), "sha256:old", runtime, false, "")
+	at := time.Now().UTC()
+	monitor.reloadResult(at, "0123456789abcdef0123456789abcdef", "sha256:old", nil,
+		apperror.New(apperror.CodeConfigRestartRequired, "service.reload", "restart required"))
+	snapshot := monitor.snapshot()
+	if snapshot.Reload.LastResult != "failed" || snapshot.Reload.LastErrorCode != string(apperror.CodeConfigRestartRequired) || snapshot.Reload.LastError == "" {
+		t.Fatalf("reload failure status = %+v", snapshot.Reload)
 	}
 }

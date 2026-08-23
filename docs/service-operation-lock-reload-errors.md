@@ -10,12 +10,11 @@
 
 这些改动不改变 tun-proxy 的 root supervisor、非 root worker、事务化配置更新和系统状态恢复架构，主要解决多个管理进程并发、reload 结果误关联以及错误只能依靠字符串判断的问题。
 
-> 实施状态（2026-08-23）：第 2 节的跨进程 Service Operation Lock 已实现，包括独立锁路径、
-> 非阻塞 `flock`、完整命令事务覆盖、`sync-user-config`、managed cleanup 和真实子进程竞争测试。
-> 第 3 节的 P1 root-only Control Socket 与 P2 外部 Reload Request ID/幂等恢复均已实现：CLI 使用
-> operation lock 的 128-bit ID，并为 apply/rollback 分别生成外部 reload request ID；supervisor 对同 ID
-> 请求提供 running/最终结果缓存，断线后可安全重试，worker status 与日志记录同一 ID。SIGHUP 会自动
-> 生成关联 ID。operation holder 的 status 展示和第 4 节完整结构化错误仍按后续阶段实施。
+> 实施状态（2026-08-23）：P0～P3 均已实现。跨进程 Service Operation Lock 覆盖完整管理事务；
+> root-only Control Socket 与外部 Reload Request ID 提供最终结果关联、幂等缓存和断线恢复；control
+> 与 privsep 协议均已升级到 v3 并传输结构化错误。CLI 支持全局 `--output=text|json`、稳定错误码、
+> 分级退出码和安全 details；rollback 双失败会以 `ROLLBACK_INCOMPLETE` 展开两个 causes。operation
+> holder 的 status 展示仍可作为独立的后续增强，不影响当前锁和错误协议。
 
 ### 1.1 当前实现
 
@@ -67,16 +66,11 @@ supervisor 对相同请求返回 `running` 或缓存的最终结果，并拒绝�
 rollback 关系的冲突请求。CLI 已移除 `launchctl kill SIGHUP` 加 status counters 的结果推断路径；
 status counters 继续用于观测，SIGHUP 继续作为会自动生成 ID 的手工兼容入口。
 
-#### CLI 错误没有稳定协议
+#### CLI 错误已有稳定协议
 
-CLI 顶层当前主要以以下方式处理错误：
-
-```go
-fmt.Fprintln(os.Stderr, "error:", err)
-os.Exit(1)
-```
-
-所有错误基本都使用退出码 1，JSON 只覆盖部分成功输出。自动化调用者只能匹配易变化的错误字符串。
+CLI 顶层现已统一使用 `internal/apperror` 分类错误。文本模式保持可读提示；全局
+`--output=json` 在失败时只向 stdout 输出一个 error envelope，stderr 保持为空。自动化调用者
+使用 `error.code` 做精确判断，进程退出码只用于粗粒度 shell 分流。现有命令级 `-json` 继续兼容。
 
 ---
 
@@ -173,7 +167,7 @@ Operation ID 使用 `crypto/rand` 生成 128 bit 随机值，并编码为 32 位
 
 ### 2.4 API
 
-建议新增：
+已新增：
 
 ```text
 internal/launchservice/operation_lock_darwin.go
@@ -317,9 +311,9 @@ upgradeLocked
 uninstallLocked
 ```
 
-### 2.7 Status 输出
+### 2.7 Status 输出（后续增强）
 
-扩展 `launchservice.Status`：
+operation holder 的 status 展示尚未实现；如后续扩展 `launchservice.Status`，建议使用：
 
 ```go
 type OperationState struct {
@@ -342,7 +336,7 @@ installed=true loaded=true running=true pid=1234 phase=running
 operation_in_flight=true operation=upgrade operation_id=a7be... holder_pid=4567
 ```
 
-status 判断 operation 是否执行中时，应尝试获取非阻塞共享锁或排他锁进行探测，不能只判断锁文件是否存在。
+后续实现时，status 判断 operation 是否执行中应尝试获取非阻塞共享锁或排他锁进行探测，不能只判断锁文件是否存在。当前 `SERVICE_OPERATION_BUSY` 错误已通过安全 `details` 返回 holder metadata。
 
 ---
 
@@ -415,13 +409,13 @@ internal/control/control_test.go
 
 ### 3.4 已实现的请求和响应协议
 
-每个连接只发送一个以换行结束的 JSON document。control protocol 当前版本为 v2。
+每个连接只发送一个以换行结束的 JSON document。control protocol 当前版本为 v3。
 
 Reload 请求：
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "kind": "reload",
   "request_id": "c2daf5a67f2f47438637ff65f8a2cb26",
   "operation_id": "1b058f53a3eb4c6aa79c29cffd75187c",
@@ -434,7 +428,7 @@ Reload 请求：
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "kind": "reload_result",
   "request_id": "c2daf5a67f2f47438637ff65f8a2cb26",
   "result": "running",
@@ -446,7 +440,7 @@ Reload 请求：
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "kind": "reload_result",
   "request_id": "c2daf5a67f2f47438637ff65f8a2cb26",
   "result": "succeeded",
@@ -456,17 +450,28 @@ Reload 请求：
 }
 ```
 
-当前失败响应仍使用字符串错误；第 4 节 P3 才会升级为完整结构化 error envelope：
+失败响应使用与 CLI 相同的结构化 `error` object：
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "kind": "reload_result",
   "request_id": "c2daf5a67f2f47438637ff65f8a2cb26",
   "result": "failed",
   "started_at": "2026-08-23T10:00:00Z",
   "completed_at": "2026-08-23T10:00:01Z",
-  "error": "reloaded default-route topology requires restart"
+  "error": {
+    "code": "CONFIG_RESTART_REQUIRED",
+    "operation": "service.reload",
+    "message": "default-route bypass topology changed and requires a service restart",
+    "retryable": false,
+    "details": {
+      "operation_id": "1b058f53a3eb4c6aa79c29cffd75187c",
+      "reload_request_id": "c2daf5a67f2f47438637ff65f8a2cb26",
+      "phase": "apply"
+    },
+    "causes": []
+  }
 }
 ```
 
@@ -522,10 +527,9 @@ type Reload struct {
 }
 
 type ReloadResult struct {
-    ReloadRequestID string `json:"reload_request_id"`
-    ConfigDigest    string `json:"config_digest,omitempty"`
-    ErrorCode       string `json:"error_code,omitempty"`
-    Error           string `json:"error,omitempty"`
+    ReloadRequestID string              `json:"reload_request_id"`
+    ConfigDigest    string              `json:"config_digest,omitempty"`
+    Error           *apperror.ErrorInfo `json:"error,omitempty"`
 }
 ```
 
@@ -535,7 +539,7 @@ type ReloadResult struct {
 2. `ReloadResult.ReloadRequestID` 与外部请求一致；
 3. `ReloadResult.ConfigDigest` 与期望 digest 一致。
 
-由于 payload schema 已发生变化，`privsep.ProtocolVersion` 已从 1 升级到 2。
+由于 structured error payload 改变了 schema，`privsep.ProtocolVersion` 已升级到 3。
 
 ### 3.7 已实现的 P2 Status Schema v2
 
@@ -587,7 +591,7 @@ control server 已保留一个有界结果缓存：
   - 正在执行时返回 `running`；
   - 已完成时返回缓存的最终结果；
 - 相同 request ID、不同 expected digest、operation ID 或 rollback 关系：
-  - 返回 failed conflict response；稳定错误码 `RELOAD_REQUEST_CONFLICT` 留待 P3。
+  - 返回带稳定错误码 `RELOAD_REQUEST_CONFLICT` 的 failed response。
 
 这样 CLI 在连接中断后可以使用相同 request ID 安全重试，而不会重复执行一个无法关联的 reload。
 
@@ -738,11 +742,17 @@ Rollback 双失败：
     "causes": [
       {
         "code": "RELOAD_REJECTED",
-        "message": "immutable setting changed"
+        "operation": "service.reload",
+        "message": "immutable setting changed",
+        "retryable": false,
+        "causes": []
       },
       {
         "code": "SERVICE_UNREACHABLE",
-        "message": "failed to restore rolled-back configuration in runtime"
+        "operation": "service.reload",
+        "message": "failed to restore rolled-back configuration in runtime",
+        "retryable": true,
+        "causes": []
       }
     ]
   }
@@ -761,7 +771,7 @@ Rollback 双失败：
 
 ### 4.4 输出模式
 
-建议增加全局参数：
+已实现全局参数：
 
 ```text
 tun-proxy --output=text ...
@@ -816,27 +826,17 @@ SERVICE_PROTOCOL_TOO_OLD → 9
 
 ### 4.6 顶层错误处理
 
-`cmd/tun-proxy/main.go` 应从：
-
-```go
-fmt.Fprintln(os.Stderr, "error:", err)
-os.Exit(1)
-```
-
-改为统一 renderer：
+`cmd/tun-proxy/main.go` 已统一通过 `executeCLI` 返回分级退出码：
 
 ```go
 func main() {
-    result, mode, err := execute(os.Args[1:])
-    if err != nil {
-        renderError(mode, err)
-        os.Exit(apperror.ExitCodeOf(err))
-    }
-    renderResult(mode, result)
+    os.Exit(executeCLI(os.Args[1:], os.Stdout, os.Stderr))
 }
 ```
 
-第一阶段不一定需要把所有成功输出立即改为统一 envelope，但必须保证 JSON 模式下失败也是结构化 JSON，且不会出现 stdout 半段 JSON、stderr 再输出文本错误的情况。
+`executeCLI` 在 text 模式直接执行命令并渲染可读错误；JSON 模式先捕获命令 stdout/stderr，
+成功时复用原生 JSON 或包装 success envelope，失败时丢弃部分输出并只渲染一个 error envelope。
+`captureCommandOutput` 在正常返回和 panic 路径都会恢复进程的 stdout/stderr descriptor。
 
 ---
 
@@ -921,16 +921,18 @@ operation holder 的 status 展示仍可作为后续增强，不影响已完成�
 ### P2：外部 Reload Request ID（已完成）
 
 - 128-bit 外部 reload request ID 贯穿 CLI、control、supervisor、worker、status 和日志；
-- privsep protocol 与 status schema 均已升级到 v2；
+- P2 时 status schema 升级到 v2；P3 structured error 落地后 control 与 privsep protocol 均升级到 v3；
 - 增加断线安全重试、同 ID 幂等缓存、conflict 检查和 response 丢失后的结果查询；
 - rollback 使用新 ID，并记录 `rollback_of`。
 
-### P3：完整结构化错误（待实施）
+### P3：完整结构化错误（已完成）
 
-- 增加 `internal/apperror`；
-- 覆盖 typed error、JSON error envelope、全局输出模式和退出码映射；
-- 正确展开 `errors.Join` causes；
-- 确保 JSON 失败输出只有一个合法 document。
+- 新增 `internal/apperror` typed error、稳定错误码和安全 details 白名单；
+- control/privsep v3 跨进程保留 error code、operation、retryable、details 和 causes；
+- 实现 JSON error envelope、全局 `--output=text|json` 和分级退出码；
+- `errors.Join` causes 正确展开，apply 与 rollback 双失败返回 `ROLLBACK_INCOMPLETE`；
+- JSON 失败输出只包含一个合法 document，stderr 不混入文本错误；
+- runtime status 的 `LastErrorCode` 记录稳定错误码。
 
 ---
 
@@ -945,7 +947,7 @@ operation holder 的 status 展示仍可作为后续增强，不影响已完成�
 - Restart、Upgrade 和 Uninstall 不发生嵌套自锁；
 - reload rollback 期间其他写操作仍被阻止；
 - uninstall purge 不删除或破坏 operation lock；
-- status 能正确显示有锁和无锁状态。
+- operation busy 错误能返回 holder metadata；status 展示仍是独立后续增强。
 
 `flock` 测试建议使用 helper subprocess，而不只使用同一测试进程中的两个 goroutine 或文件描述符，以覆盖真实的跨进程语义。
 
@@ -973,7 +975,7 @@ P2 已覆盖：
 - 手工 SIGHUP 自动生成 request ID 并进入统一日志链路；
 - 缓存按 64 条和 10 分钟边界清理。
 
-`ROLLBACK_INCOMPLETE` 稳定错误码属于 P3 结构化错误范围，尚未实现。
+`ROLLBACK_INCOMPLETE` 已实现；apply 与 rollback 的结构化错误会分别出现在 `causes` 中。
 
 ### 7.3 结构化错误
 
@@ -990,7 +992,7 @@ P2 已覆盖：
 
 ## 8. 最终结论
 
-当前前三步已完成，顺序为：
+P0～P3 已按以下顺序全部完成：
 
 ```text
 P0 跨进程 service operation lock（已完成）
@@ -999,10 +1001,10 @@ P1 root-only control socket + 最终结果（已完成）
     ↓
 P2 外部 reload request ID / 幂等恢复（已完成）
     ↓
-P3 完整结构化错误（待实施）
+P3 完整结构化错误（已完成）
 ```
 
-后续实现必须继续遵守两个核心原则：
+当前实现继续遵守两个核心原则：
 
 1. operation lock 覆盖配置替换、runtime 确认、commit 和 rollback 的完整事务，不能只包住一次 control request；
 2. 现有 privsep `uint64 RequestID` 继续负责 supervisor/worker 帧匹配；P2 新增的独立外部 Reload Request ID 负责 CLI 到最终结果的跨连接关联与恢复。

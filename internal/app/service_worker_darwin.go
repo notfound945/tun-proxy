@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"github.com/hailinpan/tun-proxy/internal/config"
 	"github.com/hailinpan/tun-proxy/internal/fakedns"
 	"github.com/hailinpan/tun-proxy/internal/fakeip"
@@ -279,21 +280,38 @@ func (worker *ServiceWorker) Reload(ctx context.Context, reload privsep.Reload) 
 	worker.mutex.Lock()
 	defer worker.mutex.Unlock()
 	if !worker.committed {
-		return errors.New("service worker is not running")
+		return apperror.New(apperror.CodeServiceNotRunning, "service.reload", "service worker is not running").WithDetails(map[string]any{
+			"reload_request_id": reload.ReloadRequestID,
+			"phase":             "worker",
+		})
 	}
 	next, digest, err := config.LoadBytesWithDigest(reload.Config)
+	if err != nil {
+		err = apperror.Wrap(apperror.CodeConfigInvalid, "service.reload", "worker received an invalid configuration", err)
+	}
 	if err == nil && digest != reload.ConfigDigest {
-		err = fmt.Errorf("compiled reload digest=%q, want %q", digest, reload.ConfigDigest)
+		err = apperror.Wrap(
+			apperror.CodeReloadDigestMismatch,
+			"service.reload",
+			"worker compiled an unexpected configuration digest",
+			fmt.Errorf("got %q, want %q", digest, reload.ConfigDigest),
+		).WithDetails(map[string]any{
+			"actual_config_digest":   digest,
+			"expected_config_digest": reload.ConfigDigest,
+		})
 	}
 	if err == nil {
 		err = PreflightReload(ctx, worker.runtime, next)
 	}
-	nextEffective := runtimeWithInterfaceDNS(next, interfaceDNS(reload.InterfaceDNS))
+	var nextEffective *config.Config
+	if err == nil {
+		nextEffective = runtimeWithInterfaceDNS(next, interfaceDNS(reload.InterfaceDNS))
+	}
 	var nextGeneration *dataPlaneGeneration
 	if err == nil {
 		nextGeneration, err = worker.plane.prepare(nextEffective)
 		if err != nil {
-			err = fmt.Errorf("build reloaded data plane: %w", err)
+			err = apperror.Wrap(apperror.CodeReloadRejected, "service.reload", "worker could not build the reloaded data plane", err)
 		}
 	}
 	var nextResolver *resolver.Client
@@ -301,11 +319,13 @@ func (worker *ServiceWorker) Reload(ctx context.Context, reload privsep.Reload) 
 		defaultOutbound := nextEffective.Outbounds[nextEffective.DNS.DefaultOutbound]
 		nextResolver, err = resolver.NewClient(defaultOutbound.Interface, defaultOutbound.DNS, runtimeDNSQueryTimeout, next.DNS.MaxConcurrent)
 		if err != nil {
-			err = fmt.Errorf("build reloaded Fake DNS resolver: %w", err)
+			err = apperror.Wrap(apperror.CodeReloadRejected, "service.reload", "worker could not build the reloaded Fake DNS resolver", err)
 		}
 	}
 	if err == nil {
-		err = worker.dnsServer.Reload(next.FakeIP.DNSTTL, runtimeDNSQueryTimeout, next.FakeIP.Exclude, nextResolver)
+		if reloadErr := worker.dnsServer.Reload(next.FakeIP.DNSTTL, runtimeDNSQueryTimeout, next.FakeIP.Exclude, nextResolver); reloadErr != nil {
+			err = apperror.Wrap(apperror.CodeReloadRejected, "service.reload", "worker Fake DNS reload was rejected", reloadErr)
+		}
 	}
 	if err == nil {
 		worker.plane.commit(nextGeneration)
@@ -313,6 +333,8 @@ func (worker *ServiceWorker) Reload(ctx context.Context, reload privsep.Reload) 
 		worker.activeRuntime = nextEffective
 		worker.digest = digest
 		configureLogging(next.Log)
+	} else {
+		err = annotateWorkerReloadError(ctx, reload, err)
 	}
 	worker.monitor.reloadResult(time.Now().UTC(), reload.ReloadRequestID, worker.digest, next, err)
 	if err != nil {
@@ -321,6 +343,23 @@ func (worker *ServiceWorker) Reload(ctx context.Context, reload privsep.Reload) 
 		slog.Info("worker configuration reloaded", "request_id", reload.ReloadRequestID, "config_digest", worker.digest)
 	}
 	return err
+}
+
+func annotateWorkerReloadError(ctx context.Context, reload privsep.Reload, err error) error {
+	code := apperror.CodeOf(err)
+	var typed *apperror.Error
+	isTyped := errors.As(err, &typed) && typed != nil
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		code = apperror.CodeReloadTimeout
+	} else if !isTyped {
+		code = apperror.CodeReloadRejected
+	}
+	details := map[string]any{
+		"reload_request_id":      reload.ReloadRequestID,
+		"expected_config_digest": reload.ConfigDigest,
+		"phase":                  "worker",
+	}
+	return apperror.Wrap(code, "service.reload", "worker rejected configuration reload", err).WithDetails(details)
 }
 
 func (worker *ServiceWorker) Done() <-chan error { return worker.done }

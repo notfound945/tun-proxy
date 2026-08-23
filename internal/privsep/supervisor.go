@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 )
 
 // SupervisorSession owns the root side of one private worker protocol
@@ -165,13 +167,13 @@ func (session *SupervisorSession) Reload(ctx context.Context, payload Reload) er
 		return err
 	}
 	if result.ReloadRequestID != payload.ReloadRequestID {
-		return fmt.Errorf("worker reload request ID=%q, want %q", result.ReloadRequestID, payload.ReloadRequestID)
+		return apperror.Wrap(apperror.CodeReloadRequestMismatch, "service.reload", "worker reload request ID does not match the reload request", fmt.Errorf("got %q, want %q", result.ReloadRequestID, payload.ReloadRequestID)).WithDetails(map[string]any{"reload_request_id": payload.ReloadRequestID})
 	}
-	if result.Error != "" {
-		return errors.New(result.Error)
+	if result.Error != nil {
+		return apperror.FromInfo(*result.Error)
 	}
 	if result.ConfigDigest != payload.ConfigDigest {
-		return fmt.Errorf("worker reload digest=%q, want %q", result.ConfigDigest, payload.ConfigDigest)
+		return apperror.Wrap(apperror.CodeReloadDigestMismatch, "service.reload", "worker activated an unexpected configuration digest", fmt.Errorf("got %q, want %q", result.ConfigDigest, payload.ConfigDigest)).WithDetails(map[string]any{"expected_config_digest": payload.ConfigDigest, "actual_config_digest": result.ConfigDigest, "reload_request_id": payload.ReloadRequestID})
 	}
 	return nil
 }

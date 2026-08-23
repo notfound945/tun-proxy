@@ -7,6 +7,21 @@ The project does not plan a graphical management interface. The deferred Phase
 
 ## Command surface
 
+### Global output and structured errors
+
+```sh
+tun-proxy --output=text status
+tun-proxy --output=json status
+sudo tun-proxy --output=json service reload -user-config
+```
+
+The global mode precedes the command. JSON failures emit exactly one document on
+stdout and no duplicate text on stderr. Stable `error.code` values are the exact
+automation contract; exit codes 1–9 are coarse classes. Control and privsep
+protocol v3 carry the same structured error object across CLI, supervisor, and
+worker boundaries, including allowlisted correlation details and expanded
+rollback causes. Existing command-level `-json` flags remain compatible.
+
 ### Help
 
 ```sh
@@ -159,8 +174,10 @@ domain-suffix boundaries, offline/pending and resolved explain decisions,
 partial diagnosis, service manager restart, root-only control-socket metadata and
 peer checks, expected-digest reload confirmation, worker failure propagation,
 rollback recovery reload, stopped/running configuration synchronization and
-restart rollback, cleanup recovery safety, log tail edge cases, and symlink
-rejection are covered by automated tests.
+restart rollback, cleanup recovery safety, log tail edge cases, symlink
+rejection, stable typed-error mapping, control/privsep v3 error transport,
+single-document JSON failures, and structured rollback causes are covered by
+automated tests.
 
 The remaining root acceptance is intentionally deferred to a maintenance
 window so the currently running managed service is not disturbed:

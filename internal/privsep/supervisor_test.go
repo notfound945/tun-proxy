@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 )
 
 func TestSupervisorSessionProtocolLifecycle(t *testing.T) {
@@ -150,7 +152,8 @@ func TestSupervisorSessionReportsWorkerExitAndReloadFailure(t *testing.T) {
 			_, _, _ = ReceiveKind[Commit](codec, KindCommit)
 			_ = codec.Send(KindRunning, 0, Running{ConfigDigest: bootstrap.ConfigDigest})
 			reload, requestID, _ := ReceiveKind[Reload](codec, KindReload)
-			_ = codec.Send(KindReloadResult, requestID, ReloadResult{ReloadRequestID: reload.ReloadRequestID, Error: "invalid reload"})
+			failure := apperror.InfoOf(apperror.New(apperror.CodeReloadRejected, "service.reload", "invalid reload"))
+			_ = codec.Send(KindReloadResult, requestID, ReloadResult{ReloadRequestID: reload.ReloadRequestID, Error: &failure})
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

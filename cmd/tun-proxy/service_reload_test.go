@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"github.com/hailinpan/tun-proxy/internal/config"
 	"github.com/hailinpan/tun-proxy/internal/control"
 	"github.com/hailinpan/tun-proxy/internal/launchservice"
@@ -36,15 +37,15 @@ func TestValidateServiceReloadStatusGuidesStoppedServiceToStart(t *testing.T) {
 		Loaded:    true,
 		Runtime:   launchservice.RuntimeState{Phase: "stopped"},
 	})
-	if err == nil || !strings.Contains(err.Error(), launchservice.StartCommand) {
-		t.Fatalf("validateServiceReloadStatus() error = %v, want command %q", err, launchservice.StartCommand)
+	if err == nil || !strings.Contains(err.Error(), launchservice.StartCommand) || apperror.CodeOf(err) != apperror.CodeServiceNotRunning {
+		t.Fatalf("validateServiceReloadStatus() error = %v code=%s, want command %q", err, apperror.CodeOf(err), launchservice.StartCommand)
 	}
 }
 
 func TestValidateServiceReloadStatusGuidesMissingServiceToInstall(t *testing.T) {
 	err := validateServiceReloadStatus(launchservice.Status{})
-	if err == nil || !strings.Contains(err.Error(), launchservice.InstallCommand) {
-		t.Fatalf("validateServiceReloadStatus() error = %v, want command %q", err, launchservice.InstallCommand)
+	if err == nil || !strings.Contains(err.Error(), launchservice.InstallCommand) || apperror.CodeOf(err) != apperror.CodeServiceNotInstalled {
+		t.Fatalf("validateServiceReloadStatus() error = %v code=%s, want command %q", err, apperror.CodeOf(err), launchservice.InstallCommand)
 	}
 }
 
@@ -65,8 +66,8 @@ func TestValidateServiceReloadStatusRejectsRunningServiceBeforeReady(t *testing.
 		Loaded:    true,
 		Runtime:   launchservice.RuntimeState{Running: true, PID: 42, Phase: "starting"},
 	})
-	if err == nil || !strings.Contains(err.Error(), launchservice.StartCommand) {
-		t.Fatalf("validateServiceReloadStatus() error = %v, want not-running guidance", err)
+	if err == nil || !strings.Contains(err.Error(), launchservice.StartCommand) || apperror.CodeOf(err) != apperror.CodeServiceNotRunning {
+		t.Fatalf("validateServiceReloadStatus() error = %v code=%s, want not-running guidance", err, apperror.CodeOf(err))
 	}
 }
 
@@ -125,7 +126,8 @@ func TestRequestServiceReloadReturnsWorkerFailureDirectly(t *testing.T) {
 	want := errors.New("worker rejected immutable setting")
 	_, err := requestServiceReload(t.Context(), "/tmp/control.sock", 0, testServiceReloadRequest(), time.Second,
 		func(context.Context, string, uint32, control.ReloadRequest) (control.ReloadResponse, error) {
-			return control.ReloadResponse{Result: control.ResultFailed, Error: want.Error()}, want
+			info := apperror.InfoOf(apperror.Wrap(apperror.CodeReloadRejected, "service.reload", "worker rejected configuration reload", want))
+			return control.ReloadResponse{Result: control.ResultFailed, Error: &info}, want
 		})
 	if err == nil || !strings.Contains(err.Error(), want.Error()) {
 		t.Fatalf("requestServiceReload() error = %v", err)
@@ -139,11 +141,34 @@ func TestRequestServiceReloadHonorsTimeoutWithoutStatusPolling(t *testing.T) {
 			<-ctx.Done()
 			return control.ReloadResponse{}, ctx.Err()
 		})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("requestServiceReload() error = %v", err)
+	if !errors.Is(err, context.DeadlineExceeded) || apperror.CodeOf(err) != apperror.CodeReloadTimeout {
+		t.Fatalf("requestServiceReload() error = %v code=%s", err, apperror.CodeOf(err))
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("timeout elapsed = %s", elapsed)
+	}
+}
+
+func TestRequestServiceReloadRejectsUnexpectedDigest(t *testing.T) {
+	request := testServiceReloadRequest()
+	_, err := requestServiceReload(t.Context(), "/tmp/control.sock", 0, request, time.Second,
+		func(context.Context, string, uint32, control.ReloadRequest) (control.ReloadResponse, error) {
+			return control.ReloadResponse{Result: control.ResultSucceeded, ConfigDigest: "sha256:other"}, nil
+		})
+	info := apperror.InfoOf(err)
+	if info.Code != apperror.CodeReloadDigestMismatch || info.Details["reload_request_id"] != request.RequestID || info.Details["operation_id"] != request.OperationID {
+		t.Fatalf("digest mismatch = %+v", info)
+	}
+}
+
+func TestRequestServiceReloadRejectsUnexpectedResult(t *testing.T) {
+	request := testServiceReloadRequest()
+	_, err := requestServiceReload(t.Context(), "/tmp/control.sock", 0, request, time.Second,
+		func(context.Context, string, uint32, control.ReloadRequest) (control.ReloadResponse, error) {
+			return control.ReloadResponse{Result: "future-result"}, nil
+		})
+	if got := apperror.CodeOf(err); got != apperror.CodeServiceProtocolTooOld {
+		t.Fatalf("unexpected result code = %s, error=%v", got, err)
 	}
 }
 
@@ -321,5 +346,18 @@ func TestNewServiceReloadRequestUsesLockedOperationID(t *testing.T) {
 	}
 	if request.OperationID != testServiceOperationID || request.RollbackOf != testServiceReloadRequestID || request.RequestID == request.RollbackOf || len(request.RequestID) != 32 {
 		t.Fatalf("request = %+v", request)
+	}
+}
+
+func TestServiceReloadDetailsOmitsEmptyCorrelationFields(t *testing.T) {
+	details := serviceReloadDetails(control.ReloadRequest{
+		RequestID:   "0123456789abcdef0123456789abcdef",
+		OperationID: "fedcba9876543210fedcba9876543210",
+	}, "apply")
+	if _, ok := details["rollback_of"]; ok {
+		t.Fatalf("details unexpectedly contain empty rollback_of: %#v", details)
+	}
+	if details["reload_request_id"] == "" || details["operation_id"] == "" || details["phase"] != "apply" {
+		t.Fatalf("details = %#v", details)
 	}
 }

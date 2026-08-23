@@ -55,7 +55,7 @@ func newCommandFlagSet(topic string, output io.Writer) *flag.FlagSet {
 }
 
 var commandUsages = map[string]string{
-	"": `usage: tun-proxy <command> [options]
+	"": `usage: tun-proxy [--output=text|json] <command> [options]
        tun-proxy -version
 
 commands:

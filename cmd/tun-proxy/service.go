@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hailinpan/tun-proxy/internal/app"
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"github.com/hailinpan/tun-proxy/internal/config"
 	"github.com/hailinpan/tun-proxy/internal/control"
 	"github.com/hailinpan/tun-proxy/internal/launchservice"
@@ -199,7 +200,7 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		return fmt.Errorf("service reload received unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
 	if options.timeout <= 0 {
-		return errors.New("service reload timeout must be positive")
+		return apperror.New(apperror.CodeUsageError, "service.reload", "service reload timeout must be positive")
 	}
 	configPath, err := resolveServiceReloadConfigPath(options)
 	if err != nil {
@@ -226,7 +227,7 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		}
 		current, err := config.LoadFile(manager.Layout.Config)
 		if err != nil {
-			return fmt.Errorf("load managed configuration before reload: %w", err)
+			return apperror.Wrap(apperror.CodeConfigInvalid, "service.reload", "managed configuration is invalid", err)
 		}
 		if err := app.PreflightReload(ctx, current, next); err != nil {
 			return fmt.Errorf("validate configuration for live reload: %w", err)
@@ -248,10 +249,15 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		return fmt.Errorf("read service state before reload: %w", err)
 	}
 	if state.ControlSocket == "" {
-		return errors.New("service state has no supervisor control socket")
+		return apperror.New(apperror.CodeServiceProtocolTooOld, "service.reload", "running service does not advertise a reload control socket")
 	}
 	if state.ControlSocket != manager.Layout.ControlSocket {
-		return fmt.Errorf("service state control socket is %q, want %q", state.ControlSocket, manager.Layout.ControlSocket)
+		return apperror.Wrap(
+			apperror.CodeUnsafeFile,
+			"service.reload",
+			"service state references an unexpected control socket",
+			fmt.Errorf("got %q, want %q", state.ControlSocket, manager.Layout.ControlSocket),
+		).WithDetails(map[string]any{"socket_path": state.ControlSocket})
 	}
 
 	var configUpdate *launchservice.ConfigUpdate
@@ -273,9 +279,31 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 		}
 		rollbackErr := rollbackServiceReloadConfig(ctx, manager, configUpdate, state.ControlSocket, options.timeout, request.OperationID, request.RequestID, control.Reload)
 		if rollbackErr != nil {
-			return errors.Join(fmt.Errorf("apply synchronized configuration: %w", reloadErr), rollbackErr)
+			applyCause := apperror.Wrap(
+				apperror.CodeOf(reloadErr),
+				"service.reload",
+				"synchronized configuration reload failed",
+				reloadErr,
+			)
+			rollbackCause := apperror.Wrap(
+				apperror.CodeOf(rollbackErr),
+				"service.reload",
+				"failed to restore the rolled-back configuration in the running service",
+				rollbackErr,
+			)
+			return apperror.Wrap(
+				apperror.CodeRollbackIncomplete,
+				"service.reload",
+				"configuration reload failed and rollback was incomplete",
+				errors.Join(applyCause, rollbackCause),
+			).WithDetails(serviceReloadDetails(request, "rollback"))
 		}
-		return fmt.Errorf("apply synchronized configuration (managed configuration rolled back): %w", reloadErr)
+		return apperror.Wrap(
+			apperror.CodeOf(reloadErr),
+			"service.reload",
+			"configuration reload failed; managed configuration was rolled back",
+			reloadErr,
+		).WithDetails(serviceReloadDetails(request, "rollback"))
 	}
 	if configUpdate != nil {
 		if err := configUpdate.Commit(); err != nil {
@@ -289,7 +317,7 @@ func serviceReloadCommand(ctx context.Context, manager *launchservice.Manager, a
 
 func resolveServiceReloadConfigPath(options serviceReloadOptions) (string, error) {
 	if options.useUserConfig && options.configPath != "" {
-		return "", errors.New("service reload -user-config and -config cannot be used together")
+		return "", apperror.New(apperror.CodeUsageError, "service.reload", "service reload -user-config and -config cannot be used together")
 	}
 	if options.useUserConfig {
 		return defaultUserConfigPath(), nil
@@ -329,7 +357,7 @@ func requestServiceReload(
 	reload serviceControlReload,
 ) (control.ReloadResponse, error) {
 	if reload == nil {
-		return control.ReloadResponse{}, errors.New("service control reload client is required")
+		return control.ReloadResponse{}, apperror.New(apperror.CodeInternalError, "service.reload", "service control reload client is unavailable")
 	}
 	reloadCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -337,24 +365,79 @@ func requestServiceReload(
 		response, err := reload(reloadCtx, socket, serverUID, request)
 		if err == nil && response.Result == control.ResultSucceeded {
 			if response.ConfigDigest != request.ExpectedConfigDigest {
-				return response, fmt.Errorf("supervisor reloaded config digest %q, want %q", response.ConfigDigest, request.ExpectedConfigDigest)
+				return response, apperror.Wrap(
+					apperror.CodeReloadDigestMismatch,
+					"service.reload",
+					"supervisor activated an unexpected configuration digest",
+					fmt.Errorf("got %q, want %q", response.ConfigDigest, request.ExpectedConfigDigest),
+				).WithDetails(serviceReloadDigestDetails(request, response.ConfigDigest))
 			}
 			return response, nil
 		}
 		if err != nil && !control.IsTransportError(err) {
-			return response, fmt.Errorf("request supervisor reload: %w", err)
+			return response, annotateServiceReloadError(err, request, "request")
 		}
 		if err == nil && response.Result != control.ResultRunning {
-			return response, fmt.Errorf("request supervisor reload returned unexpected result %q", response.Result)
+			return response, apperror.Wrap(
+				apperror.CodeServiceProtocolTooOld,
+				"service.reload",
+				"supervisor returned an unsupported reload result",
+				fmt.Errorf("result %q", response.Result),
+			).WithDetails(serviceReloadDetails(request, "request"))
 		}
 		timer := time.NewTimer(50 * time.Millisecond)
 		select {
 		case <-reloadCtx.Done():
 			timer.Stop()
-			return response, reloadCtx.Err()
+			return response, apperror.Wrap(
+				apperror.CodeReloadTimeout,
+				"service.reload",
+				"configuration reload did not complete before the timeout",
+				reloadCtx.Err(),
+			).WithDetails(serviceReloadDetails(request, "request"))
 		case <-timer.C:
 		}
 	}
+}
+
+func serviceReloadDetails(request control.ReloadRequest, phase string) map[string]any {
+	details := map[string]any{}
+	if request.OperationID != "" {
+		details["operation_id"] = request.OperationID
+	}
+	if request.RequestID != "" {
+		details["reload_request_id"] = request.RequestID
+	}
+	if request.RollbackOf != "" {
+		details["rollback_of"] = request.RollbackOf
+	}
+	if phase != "" {
+		details["phase"] = phase
+	}
+	return details
+}
+
+func serviceReloadDigestDetails(request control.ReloadRequest, actualDigest string) map[string]any {
+	details := serviceReloadDetails(request, "verify")
+	details["expected_config_digest"] = request.ExpectedConfigDigest
+	details["actual_config_digest"] = actualDigest
+	return details
+}
+
+func annotateServiceReloadError(err error, request control.ReloadRequest, phase string) error {
+	if err == nil {
+		return nil
+	}
+	code := apperror.CodeOf(err)
+	var typed *apperror.Error
+	isTyped := errors.As(err, &typed) && typed != nil
+	if errors.Is(err, context.DeadlineExceeded) {
+		code = apperror.CodeReloadTimeout
+	} else if !isTyped {
+		code = apperror.CodeReloadRejected
+	}
+	wrapped := apperror.Wrap(code, "service.reload", "supervisor rejected configuration reload", err)
+	return wrapped.WithDetails(serviceReloadDetails(request, phase))
 }
 
 type serviceConfigRollback interface {
@@ -393,7 +476,11 @@ func rollbackServiceReloadConfig(
 
 func validateServiceReloadStatus(status launchservice.Status) error {
 	if !status.Installed {
-		return fmt.Errorf("tun-proxy service is not installed; run %q first", launchservice.InstallCommand)
+		return apperror.New(
+			apperror.CodeServiceNotInstalled,
+			"service.reload",
+			fmt.Sprintf("tun-proxy service is not installed; run %q first", launchservice.InstallCommand),
+		)
 	}
 	if status.Runtime.Running && status.Runtime.Phase == "running" {
 		return nil
@@ -402,7 +489,11 @@ func validateServiceReloadStatus(status launchservice.Status) error {
 }
 
 func serviceReloadNotRunningError(phase string) error {
-	return fmt.Errorf("tun-proxy service is not running (phase=%q); run %q first", phase, launchservice.StartCommand)
+	return apperror.New(
+		apperror.CodeServiceNotRunning,
+		"service.reload",
+		fmt.Sprintf("tun-proxy service is not running (phase=%q); run %q first", phase, launchservice.StartCommand),
+	).WithDetails(map[string]any{"phase": phase})
 }
 
 type serviceInstallOptions struct {
@@ -725,43 +816,51 @@ func validateConfigSource(path string) (string, error) {
 }
 
 func loadValidatedConfigSource(path string) (string, []byte, *config.Config, string, error) {
+	const operation = "config.validate"
+	invalid := func(message string, cause error) (string, []byte, *config.Config, string, error) {
+		return "", nil, nil, "", apperror.Wrap(apperror.CodeConfigInvalid, operation, message, cause)
+	}
+	unsafe := func(message string, cause error) (string, []byte, *config.Config, string, error) {
+		return "", nil, nil, "", apperror.Wrap(apperror.CodeUnsafeFile, operation, message, cause)
+	}
+
 	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return "", nil, nil, "", fmt.Errorf("resolve source path %q: %w", path, err)
+		return invalid("configuration path is invalid", fmt.Errorf("resolve source path %q: %w", path, err))
 	}
 	absolute = filepath.Clean(absolute)
 	info, err := os.Lstat(absolute)
 	if err != nil {
-		return "", nil, nil, "", fmt.Errorf("inspect source %q: %w", absolute, err)
+		return invalid("configuration file cannot be inspected", fmt.Errorf("inspect source %q: %w", absolute, err))
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return "", nil, nil, "", fmt.Errorf("source %q must be a regular file, not a symlink", absolute)
+		return unsafe("configuration source must be a regular file and not a symlink", fmt.Errorf("source %q has mode %s", absolute, info.Mode()))
 	}
 	file, err := os.Open(absolute)
 	if err != nil {
-		return "", nil, nil, "", fmt.Errorf("open source %q: %w", absolute, err)
+		return invalid("configuration file cannot be opened", fmt.Errorf("open source %q: %w", absolute, err))
 	}
 	defer file.Close() //nolint:errcheck // Best-effort read-only source cleanup.
 	opened, err := file.Stat()
 	if err != nil {
-		return "", nil, nil, "", fmt.Errorf("inspect opened source %q: %w", absolute, err)
+		return invalid("configuration file cannot be inspected", fmt.Errorf("inspect opened source %q: %w", absolute, err))
 	}
 	if !os.SameFile(info, opened) {
-		return "", nil, nil, "", fmt.Errorf("source %q changed while opening", absolute)
+		return unsafe("configuration source changed while opening", fmt.Errorf("source %q changed while opening", absolute))
 	}
 	contents, err := io.ReadAll(io.LimitReader(file, privsep.MaxConfigSize+1))
 	if err != nil {
-		return "", nil, nil, "", fmt.Errorf("read source %q: %w", absolute, err)
+		return invalid("configuration file cannot be read", fmt.Errorf("read source %q: %w", absolute, err))
 	}
 	if len(contents) > privsep.MaxConfigSize {
-		return "", nil, nil, "", fmt.Errorf("source %q exceeds %d bytes", absolute, privsep.MaxConfigSize)
+		return invalid("configuration file is too large", fmt.Errorf("source %q exceeds %d bytes", absolute, privsep.MaxConfigSize))
 	}
 	runtime, digest, err := config.LoadBytesWithDigest(contents)
 	if err != nil {
-		return "", nil, nil, "", err
+		return invalid("configuration is invalid", err)
 	}
 	if err := validateServiceRuntime(runtime); err != nil {
-		return "", nil, nil, "", err
+		return invalid("configuration is invalid for the managed service", err)
 	}
 	return absolute, contents, runtime, digest, nil
 }

@@ -19,6 +19,26 @@
 大多数查询命令和离线配置命令不需要 root。创建 utun、修改路由或 DNS、恢复系统状态、
 管理 LaunchDaemon 的命令应通过 `sudo` 运行。
 
+### 全局输出模式
+
+全局参数必须写在 command 之前：
+
+```sh
+tun-proxy --output=text status
+tun-proxy --output=json service status
+sudo tun-proxy --output=json service reload -user-config
+```
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--output=text\|json` | `text` | 选择面向用户的文本输出或面向自动化的 JSON 输出。 |
+
+JSON 失败时 stdout 只输出一个合法 document，stderr 为空；精确错误类型读取
+`error.code`，退出码只用于粗粒度分类。失败 envelope 包含 `operation`、`message`、
+`retryable`、白名单 `details` 和 `causes`。命令级 `-json` 继续兼容；全局 JSON 模式会让已有
+JSON 查询命令直接返回其原生 JSON，其他成功命令则包装为 `{"ok":true,...}`。
+私有 `_service-run` / `_service-worker` 不切换到 JSON。
+
 ## 命令概览
 
 | 命令 | 用途 | Root 要求 |

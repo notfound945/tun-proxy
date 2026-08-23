@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 )
 
 const (
@@ -60,7 +62,7 @@ func TestControlServerIsOwnerOnlyAndReturnsFinalReloadResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.ConfigDigest != testDigest || response.Error != "" {
+	if response.ConfigDigest != testDigest || response.Error != nil {
 		t.Fatalf("response = %+v", response)
 	}
 }
@@ -79,7 +81,7 @@ func TestControlServerReturnsHandlerFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "worker rejected immutable setting") {
 		t.Fatalf("Reload() response=%+v error=%v", response, err)
 	}
-	if response.Error != "worker rejected immutable setting" || response.ConfigDigest != "" {
+	if response.Error == nil || response.Error.Message != "worker rejected immutable setting" || response.ConfigDigest != "" {
 		t.Fatalf("response = %+v", response)
 	}
 }
@@ -342,7 +344,7 @@ func TestControlClientRejectsMalformedResponses(t *testing.T) {
 		{name: "unknown field", payload: strings.TrimSuffix(valid, "}") + `,"extra":true}` + "\n", want: "unknown field"},
 		{name: "trailing data", payload: valid + ` {}` + "\n", want: "trailing data"},
 		{name: "missing digest", payload: fmt.Sprintf(`{"version":%d,"kind":%q,"request_id":%q,"result":%q,"started_at":%q,"completed_at":%q}`, Version, KindReloadResult, testRequestID, ResultSucceeded, started, completed) + "\n", want: "64 hex"},
-		{name: "failure with digest", payload: strings.Replace(valid, `"result":"succeeded"`, `"result":"failed","error":"failed"`, 1) + "\n", want: "must not include"},
+		{name: "failure with digest", payload: strings.Replace(valid, `"result":"succeeded"`, `"result":"failed","error":{"code":"RELOAD_REJECTED","operation":"service.reload","message":"failed","retryable":false,"causes":[]}`, 1) + "\n", want: "must not include"},
 		{name: "wrong version", payload: strings.Replace(valid, fmt.Sprintf(`"version":%d`, Version), `"version":99`, 1) + "\n", want: "version"},
 		{name: "wrong kind", payload: strings.Replace(valid, `"kind":"reload_result"`, `"kind":"other"`, 1) + "\n", want: "kind"},
 		{name: "wrong request ID", payload: strings.Replace(valid, testRequestID, testOperationID, 1) + "\n", want: "request ID"},
@@ -524,7 +526,7 @@ func TestControlServerDeduplicatesRunningAndCompletedRequests(t *testing.T) {
 	conflict := request
 	conflict.OperationID = "11111111111111111111111111111111"
 	response := server.processReload(conflict)
-	if response.Result != ResultFailed || !strings.Contains(response.Error, "conflicts") {
+	if response.Result != ResultFailed || response.Error == nil || response.Error.Code != apperror.CodeReloadRequestConflict {
 		t.Fatalf("conflict response = %+v", response)
 	}
 }

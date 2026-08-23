@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"golang.org/x/sys/unix"
 )
 
@@ -101,7 +102,7 @@ func (manager *Manager) BeginOperation(ctx context.Context, spec OperationSpec) 
 	}
 	path := manager.Layout.OperationLock
 	if err := validateOperationLockParent(path, manager.OwnerUID); err != nil {
-		return nil, err
+		return nil, apperror.Wrap(apperror.CodeUnsafeFile, "service."+string(spec.Kind), "service operation lock parent is unsafe", err)
 	}
 
 	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
@@ -117,12 +118,19 @@ func (manager *Manager) BeginOperation(ctx context.Context, spec OperationSpec) 
 	}()
 
 	if err := validateOperationLockFile(path, file, manager.OwnerUID); err != nil {
-		return nil, err
+		return nil, apperror.Wrap(apperror.CodeUnsafeFile, "service."+string(spec.Kind), "service operation lock file is unsafe", err)
 	}
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
 			holder := readOperationMetadata(file)
-			return nil, &OperationBusyError{Holder: holder}
+			details := map[string]any{}
+			if holder != nil {
+				details["holder_operation"] = string(holder.Kind)
+				details["holder_operation_id"] = holder.ID
+				details["holder_pid"] = holder.PID
+				details["started_at"] = holder.StartedAt
+			}
+			return nil, apperror.Wrap(apperror.CodeServiceOperationBusy, "service."+string(spec.Kind), "another service operation is in progress", &OperationBusyError{Holder: holder}).WithDetails(details)
 		}
 		return nil, fmt.Errorf("lock service operation file %q: %w", path, err)
 	}

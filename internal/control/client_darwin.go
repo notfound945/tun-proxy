@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"time"
+
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 )
 
 const controlDialTimeout = 2 * time.Second
@@ -52,7 +54,7 @@ func Reload(ctx context.Context, path string, expectedServerUID uint32, request 
 		if errors.Is(err, os.ErrNotExist) {
 			return ReloadResponse{}, &TransportError{Err: err}
 		}
-		return ReloadResponse{}, err
+		return ReloadResponse{}, apperror.Wrap(apperror.CodeUnsafeFile, "service.reload", "supervisor control socket is unsafe", err).WithDetails(map[string]any{"socket_path": path})
 	}
 	dialer := net.Dialer{Timeout: controlDialTimeout}
 	connection, err := dialer.DialContext(ctx, "unix", path)
@@ -83,19 +85,22 @@ func Reload(ctx context.Context, path string, expectedServerUID uint32, request 
 	}
 	var response ReloadResponse
 	if err := decodeStrict(payload, &response); err != nil {
-		return ReloadResponse{}, fmt.Errorf("decode control response: %w", err)
+		return ReloadResponse{}, apperror.Wrap(apperror.CodeServiceProtocolTooOld, "service.reload", "supervisor control response is incompatible", err)
+	}
+	if response.Version != Version {
+		return ReloadResponse{}, apperror.Wrap(apperror.CodeServiceProtocolTooOld, "service.reload", "supervisor control protocol version is incompatible", fmt.Errorf("got version %d, want %d", response.Version, Version))
 	}
 	if err := response.validate(); err != nil {
-		return ReloadResponse{}, err
+		return ReloadResponse{}, apperror.Wrap(apperror.CodeServiceProtocolTooOld, "service.reload", "supervisor control response is invalid", err)
 	}
 	if response.RequestID != request.RequestID {
-		return response, fmt.Errorf("control response request ID %q, want %q", response.RequestID, request.RequestID)
+		return response, apperror.Wrap(apperror.CodeReloadRequestMismatch, "service.reload", "supervisor response request ID does not match the reload request", fmt.Errorf("got %q, want %q", response.RequestID, request.RequestID)).WithDetails(map[string]any{"reload_request_id": request.RequestID})
 	}
 	if response.Result == ResultFailed {
-		return response, errors.New(response.Error)
+		return response, apperror.FromInfo(*response.Error)
 	}
 	if response.Result == ResultSucceeded && response.ConfigDigest != request.ExpectedConfigDigest {
-		return response, fmt.Errorf("control response config digest %q, want %q", response.ConfigDigest, request.ExpectedConfigDigest)
+		return response, apperror.Wrap(apperror.CodeReloadDigestMismatch, "service.reload", "supervisor activated an unexpected configuration digest", fmt.Errorf("got %q, want %q", response.ConfigDigest, request.ExpectedConfigDigest)).WithDetails(map[string]any{"expected_config_digest": request.ExpectedConfigDigest, "actual_config_digest": response.ConfigDigest, "reload_request_id": request.RequestID})
 	}
 	return response, nil
 }

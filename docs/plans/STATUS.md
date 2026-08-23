@@ -66,8 +66,12 @@ stopped service stopped or restarts a running service with rollback, while
 uses the root-only `/var/run/tun-proxy/control.sock`, sends an expected config
 digest plus a 128-bit external reload request ID, and waits for the final
 supervisor/worker result. Transport retries reuse the same ID and recover a
-bounded cached result; rollback uses a new ID with `rollback_of`. SIGHUP remains
-a manual compatibility entry point and generates its own correlation IDs.
+bounded cached result; rollback uses a new ID with `rollback_of`. Control and
+privsep protocol v3 now carry stable structured errors end to end. The CLI
+supports global `--output=text|json`, emits one JSON error document without
+stderr contamination, maps exact `error.code` values to coarse exit codes, and
+records reload `LastErrorCode` in runtime status. SIGHUP remains a manual
+compatibility entry point and generates its own correlation IDs.
 
 The one-off Phase 0, 2, 3, 8.6, and 8.7b spike commands were removed after
 production implementation and acceptance. Their historical evidence remains

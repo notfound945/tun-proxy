@@ -6,14 +6,17 @@ package control
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 )
 
 const (
-	Version          = 2
+	Version          = 3
 	KindReload       = "reload"
 	KindReloadResult = "reload_result"
 	ResultRunning    = "running"
@@ -42,14 +45,14 @@ type ReloadRequest struct {
 // request. Final responses are cached by the supervisor control server so a
 // client can recover a response lost after the reload was already applied.
 type ReloadResponse struct {
-	Version      int       `json:"version"`
-	Kind         string    `json:"kind"`
-	RequestID    string    `json:"request_id"`
-	Result       string    `json:"result"`
-	ConfigDigest string    `json:"config_digest,omitempty"`
-	StartedAt    time.Time `json:"started_at"`
-	CompletedAt  time.Time `json:"completed_at,omitempty"`
-	Error        string    `json:"error,omitempty"`
+	Version      int                 `json:"version"`
+	Kind         string              `json:"kind"`
+	RequestID    string              `json:"request_id"`
+	Result       string              `json:"result"`
+	ConfigDigest string              `json:"config_digest,omitempty"`
+	StartedAt    time.Time           `json:"started_at"`
+	CompletedAt  time.Time           `json:"completed_at,omitempty"`
+	Error        *apperror.ErrorInfo `json:"error,omitempty"`
 }
 
 // NewRequestID returns a cryptographically random 128-bit lowercase hex ID.
@@ -107,12 +110,19 @@ func (response ReloadResponse) validate() error {
 	if response.StartedAt.IsZero() {
 		failures = append(failures, errors.New("control response started_at is required"))
 	}
-	if len(response.Error) > maxErrorSize {
-		failures = append(failures, fmt.Errorf("control response error exceeds %d bytes", maxErrorSize))
+	if response.Error != nil {
+		if err := apperror.ValidateInfo(*response.Error); err != nil {
+			failures = append(failures, fmt.Errorf("control response error is invalid: %w", err))
+		}
+		if encoded, err := json.Marshal(response.Error); err != nil {
+			failures = append(failures, fmt.Errorf("encode control response error: %w", err))
+		} else if len(encoded) > maxErrorSize {
+			failures = append(failures, fmt.Errorf("control response error exceeds %d bytes", maxErrorSize))
+		}
 	}
 	switch response.Result {
 	case ResultRunning:
-		if !response.CompletedAt.IsZero() || response.ConfigDigest != "" || response.Error != "" {
+		if !response.CompletedAt.IsZero() || response.ConfigDigest != "" || response.Error != nil {
 			failures = append(failures, errors.New("running control response must not include completion, digest, or error"))
 		}
 	case ResultSucceeded:
@@ -122,14 +132,14 @@ func (response ReloadResponse) validate() error {
 		if err := validateDigest(response.ConfigDigest); err != nil {
 			failures = append(failures, err)
 		}
-		if response.Error != "" {
+		if response.Error != nil {
 			failures = append(failures, errors.New("successful control response must not include an error"))
 		}
 	case ResultFailed:
 		if response.CompletedAt.IsZero() {
 			failures = append(failures, errors.New("failed control response completed_at is required"))
 		}
-		if response.Error == "" {
+		if response.Error == nil {
 			failures = append(failures, errors.New("failed control response error is required"))
 		}
 		if response.ConfigDigest != "" {

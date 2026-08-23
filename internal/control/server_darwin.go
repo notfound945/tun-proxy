@@ -14,12 +14,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"golang.org/x/sys/unix"
 )
 
@@ -166,9 +165,13 @@ func (server *Server) processReload(request ReloadRequest) ReloadResponse {
 	if existing := server.requests[request.RequestID]; existing != nil {
 		if !existing.request.sameIdentity(request) {
 			server.requestMutex.Unlock()
-			return failedResponse(request.RequestID, now, fmt.Errorf(
-				"reload request ID %s conflicts with an existing request", request.RequestID,
-			))
+			return failedResponse(request.RequestID, now, apperror.New(
+				apperror.CodeReloadRequestConflict, "service.reload", "reload request ID conflicts with an existing request",
+			).WithDetails(map[string]any{
+				"reload_request_id": request.RequestID,
+				"operation_id":      request.OperationID,
+				"rollback_of":       request.RollbackOf,
+			}))
 		}
 		select {
 		case <-existing.done:
@@ -187,7 +190,7 @@ func (server *Server) processReload(request ReloadRequest) ReloadResponse {
 	server.pruneRequestsLocked(now)
 	if len(server.requests) >= requestCacheLimit {
 		server.requestMutex.Unlock()
-		return failedResponse(request.RequestID, now, errors.New("reload request cache is full"))
+		return failedResponse(request.RequestID, now, apperror.Wrap(apperror.CodeServiceUnreachable, "service.reload", "reload request cache is full", errors.New("control request cache capacity exhausted")))
 	}
 	record := &reloadRecord{request: request, started: now, done: make(chan struct{})}
 	server.requests[request.RequestID] = record
@@ -226,20 +229,18 @@ func (server *Server) executeReload(record *reloadRecord) {
 }
 
 func failedResponse(requestID string, started time.Time, err error) ReloadResponse {
-	message := "reload failed"
-	if err != nil {
-		message = err.Error()
+	if err == nil {
+		err = apperror.New(apperror.CodeReloadRejected, "service.reload", "reload failed")
 	}
-	message = strings.ToValidUTF8(message, "�")
-	if len(message) > maxErrorSize {
-		message = message[:maxErrorSize]
-		for !utf8.ValidString(message) {
-			message = message[:len(message)-1]
-		}
+	info := apperror.InfoOf(err)
+	if encoded, encodeErr := json.Marshal(info); encodeErr != nil || len(encoded) > maxErrorSize {
+		info = apperror.InfoOf(apperror.Wrap(
+			apperror.CodeInternalError, "service.reload", "reload failed with an oversized structured error", encodeErr,
+		))
 	}
 	return ReloadResponse{
 		Version: Version, Kind: KindReloadResult, RequestID: requestID,
-		Result: ResultFailed, StartedAt: started, CompletedAt: time.Now().UTC(), Error: message,
+		Result: ResultFailed, StartedAt: started, CompletedAt: time.Now().UTC(), Error: &info,
 	}
 }
 

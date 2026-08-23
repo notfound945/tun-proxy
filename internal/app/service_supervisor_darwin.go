@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"github.com/hailinpan/tun-proxy/internal/config"
 	"github.com/hailinpan/tun-proxy/internal/control"
 	"github.com/hailinpan/tun-proxy/internal/daemon"
@@ -369,7 +370,12 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 		if reloadErr == nil && next.Capture.DefaultRoute {
 			nextPlan, planErr := planDefaultRouteCaptureOwned(requestCtx, nextEffective, ipv6Enabled, system.LookupRouteScoped, system.LookupDefaultRouteScoped, defaultRoutes.Bypasses)
 			if planErr != nil || !defaultRoutes.equal(nextPlan) {
-				reloadErr = fmt.Errorf("reloaded default-route bypass topology differs from installed routes: %w", errors.Join(planErr, errors.New("restart is required to rebuild bypass routes")))
+				reloadErr = apperror.Wrap(
+					apperror.CodeConfigRestartRequired,
+					"service.reload",
+					"default-route bypass topology changed and requires a service restart",
+					errors.Join(planErr, errors.New("restart is required to rebuild bypass routes")),
+				)
 			}
 		}
 		if reloadErr == nil {
@@ -381,14 +387,19 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 			cancel()
 		}
 		if reloadErr != nil {
-			return supervisorReloadResult{err: reloadErr}
+			return supervisorReloadResult{err: annotateSupervisorReloadError(reloadErr, request, "apply")}
 		}
 		previousDigest := state.ConfigDigest
 		state.ConfigDigest = nextDigest
 		if reloadErr := system.WriteState(layout.State, state); reloadErr != nil {
 			state.ConfigDigest = previousDigest
-			reloadErr = fmt.Errorf("configuration reload activated but state update failed: %w", reloadErr)
-			return supervisorReloadResult{err: reloadErr, fatal: true}
+			reloadErr = apperror.Wrap(
+				apperror.CodeInternalError,
+				"service.reload",
+				"configuration reload activated but service state could not be updated",
+				reloadErr,
+			)
+			return supervisorReloadResult{err: annotateSupervisorReloadError(reloadErr, request, "persist"), fatal: true}
 		}
 		runtime = next
 		effectiveRuntime = nextEffective
@@ -516,9 +527,38 @@ func newSupervisorReloadRequest(ctx context.Context, expectedDigest string) (sup
 
 func validateExpectedReloadDigest(actual, expected string) error {
 	if expected != "" && actual != expected {
-		return fmt.Errorf("managed configuration digest %q does not match requested digest %q", actual, expected)
+		return apperror.Wrap(
+			apperror.CodeReloadDigestMismatch,
+			"service.reload",
+			"managed configuration digest does not match the requested digest",
+			fmt.Errorf("got %q, want %q", actual, expected),
+		).WithDetails(map[string]any{
+			"actual_config_digest":   actual,
+			"expected_config_digest": expected,
+		})
 	}
 	return nil
+}
+
+func annotateSupervisorReloadError(err error, request supervisorReloadRequest, phase string) error {
+	if err == nil {
+		return nil
+	}
+	code := apperror.CodeOf(err)
+	var typed *apperror.Error
+	isTyped := errors.As(err, &typed) && typed != nil
+	requestTimedOut := request.context != nil && errors.Is(request.context.Err(), context.DeadlineExceeded)
+	if errors.Is(err, context.DeadlineExceeded) || requestTimedOut {
+		code = apperror.CodeReloadTimeout
+	} else if !isTyped {
+		code = apperror.CodeReloadRejected
+	}
+	return apperror.Wrap(code, "service.reload", "supervisor rejected configuration reload", err).WithDetails(map[string]any{
+		"operation_id":      request.operationID,
+		"reload_request_id": request.requestID,
+		"rollback_of":       request.rollbackOf,
+		"phase":             phase,
+	})
 }
 
 func loadManagedServiceConfig(path string, layout launchservice.Layout) ([]byte, *config.Config, string, error) {
@@ -526,33 +566,39 @@ func loadManagedServiceConfig(path string, layout launchservice.Layout) ([]byte,
 }
 
 func loadManagedServiceConfigForOwner(path string, layout launchservice.Layout, expectedUID uint32) ([]byte, *config.Config, string, error) {
+	const operation = "service.reload"
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("open managed config %q: %w", path, err)
+		return nil, nil, "", apperror.Wrap(apperror.CodeConfigInvalid, operation, "managed configuration cannot be opened", fmt.Errorf("open managed config %q: %w", path, err))
 	}
 	file := os.NewFile(uintptr(fd), path)
 	defer file.Close() //nolint:errcheck // Best-effort cleanup.
 	info, err := file.Stat()
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("inspect managed config %q: %w", path, err)
+		return nil, nil, "", apperror.Wrap(apperror.CodeUnsafeFile, operation, "managed configuration cannot be inspected safely", fmt.Errorf("inspect managed config %q: %w", path, err))
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !ok || stat.Uid != expectedUID {
-		return nil, nil, "", fmt.Errorf("managed config %q must be a UID %d-owned regular file with mode 0600", path, expectedUID)
+		return nil, nil, "", apperror.Wrap(
+			apperror.CodeUnsafeFile,
+			operation,
+			"managed configuration has unsafe ownership, type, or permissions",
+			fmt.Errorf("managed config %q must be a UID %d-owned regular file with mode 0600", path, expectedUID),
+		)
 	}
 	contents, err := io.ReadAll(io.LimitReader(file, privsep.MaxConfigSize+1))
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("read managed config %q: %w", path, err)
+		return nil, nil, "", apperror.Wrap(apperror.CodeConfigInvalid, operation, "managed configuration cannot be read", fmt.Errorf("read managed config %q: %w", path, err))
 	}
 	if len(contents) > privsep.MaxConfigSize {
-		return nil, nil, "", fmt.Errorf("managed config %q exceeds %d bytes", path, privsep.MaxConfigSize)
+		return nil, nil, "", apperror.Wrap(apperror.CodeConfigInvalid, operation, "managed configuration is too large", fmt.Errorf("managed config %q exceeds %d bytes", path, privsep.MaxConfigSize))
 	}
 	runtime, digest, err := config.LoadBytesWithDigest(contents)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", apperror.Wrap(apperror.CodeConfigInvalid, operation, "managed configuration is invalid", err)
 	}
 	if err := launchservice.ValidateManagedConfig(runtime, layout); err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", apperror.Wrap(apperror.CodeConfigInvalid, operation, "managed configuration is invalid for the service", err)
 	}
 	return contents, runtime, digest, nil
 }

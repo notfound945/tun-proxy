@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"github.com/hailinpan/tun-proxy/internal/daemon"
 	"github.com/hailinpan/tun-proxy/internal/privsep"
 	"github.com/hailinpan/tun-proxy/internal/system"
@@ -292,7 +293,7 @@ func (manager *Manager) Install(ctx context.Context, binarySource, configSource 
 }
 
 func serviceNotInstalledError() error {
-	return fmt.Errorf("tun-proxy service is not completely installed; run %q first", InstallCommand)
+	return apperror.New(apperror.CodeServiceNotInstalled, "service", fmt.Sprintf("tun-proxy service is not completely installed; run %q first", InstallCommand))
 }
 
 func (manager *Manager) Start(ctx context.Context) error {
@@ -331,9 +332,9 @@ func (manager *Manager) Start(ctx context.Context) error {
 		return nil
 	}
 	if kickstartErr != nil {
-		return errors.Join(fmt.Errorf("start service: %w", kickstartErr), readyErr)
+		readyErr = errors.Join(fmt.Errorf("start service: %w", kickstartErr), readyErr)
 	}
-	return readyErr
+	return apperror.Wrap(apperror.CodeServiceStartTimeout, "service.start", "service did not become ready before the startup timeout", readyErr)
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
@@ -369,12 +370,12 @@ func (manager *Manager) Stop(ctx context.Context) error {
 		// removal. Treat the state transition as asynchronous and wait for print
 		// to report the label missing instead of failing on the first stale read.
 		if err := manager.waitUnloaded(ctx, manager.StopTimeout); err != nil {
-			return err
+			return apperror.Wrap(apperror.CodeServiceStopTimeout, "service.stop", "service did not unload before the stop timeout", err)
 		}
 	}
 	if state.Running {
 		if err := manager.wait(ctx, manager.StopTimeout, func(state RuntimeState) bool { return !state.Running }, "service process did not stop cleanly"); err != nil {
-			return err
+			return apperror.Wrap(apperror.CodeServiceStopTimeout, "service.stop", "service process did not stop before the timeout", err)
 		}
 	}
 	state, err = manager.Probe()
@@ -957,7 +958,7 @@ func (manager *Manager) restoreServiceState(before RuntimeState) error {
 
 func (manager *Manager) requireRoot() error {
 	if uid := manager.EffectiveUID(); uid != 0 {
-		return fmt.Errorf("root privileges are required for service management (effective UID is %d); run with sudo", uid)
+		return apperror.Wrap(apperror.CodeRootRequired, "service", "root privileges are required for service management; run with sudo", fmt.Errorf("effective UID is %d", uid)).WithDetails(map[string]any{"effective_uid": uid})
 	}
 	return nil
 }

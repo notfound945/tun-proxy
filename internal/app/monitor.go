@@ -7,6 +7,8 @@ import (
 
 	"github.com/hailinpan/tun-proxy/internal/config"
 	runtimestatus "github.com/hailinpan/tun-proxy/internal/status"
+
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 )
 
 type runMonitor struct {
@@ -49,7 +51,7 @@ func (monitor *runMonitor) reloadResult(at time.Time, requestID, digest string, 
 	if err != nil {
 		monitor.reload.Failures++
 		monitor.reload.LastResult = "failed"
-		monitor.reload.LastErrorCode = ""
+		monitor.reload.LastErrorCode = string(apperror.CodeOf(err))
 		monitor.reload.LastError = err.Error()
 		return
 	}

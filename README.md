@@ -166,6 +166,20 @@ sudo tun-proxy status -fake-ip
 配置仍会保留，执行 `service start` 即可重新 enable、bootstrap 并启动。日志文件不会因停止而
 清空，但停止成功后不应继续产生新的服务日志。
 
+### 结构化输出与错误码
+
+CLI 默认使用文本输出。自动化脚本可以在命令前指定全局输出模式：
+
+```sh
+tun-proxy --output=json status
+sudo tun-proxy --output=json service reload
+```
+
+JSON 失败时 stdout 只包含一个 `{"ok":false,"error":...}` document，stderr 不再混入
+文本错误；`error.code` 是精确、稳定的机器协议，退出码 `1`～`9` 仅表示粗粒度分类。
+`errors.Join`（例如 apply 与 rollback 同时失败）会展开到 `error.causes`。已有命令级 `-json`
+继续兼容，`_service-run` 和 `_service-worker` 始终保留文本日志格式。
+
 ## 清理残留 DNS 与 Fake IP 持久化映射
 
 普通 `cleanup` 会根据状态文件精确恢复 tun-proxy 记录的原 DNS 和路由：

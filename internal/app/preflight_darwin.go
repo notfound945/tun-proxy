@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/hailinpan/tun-proxy/internal/apperror"
 	"github.com/hailinpan/tun-proxy/internal/config"
 	"github.com/hailinpan/tun-proxy/internal/interfaceinfo"
 	"github.com/hailinpan/tun-proxy/internal/system"
@@ -81,9 +82,12 @@ func preflight(ctx context.Context, runtime *config.Config, ownership pathOwners
 
 func PreflightReload(_ context.Context, current, next *config.Config) error {
 	if err := config.ValidateReload(current, next); err != nil {
-		return err
+		return apperror.Wrap(apperror.CodeConfigRestartRequired, "service.reload", "configuration changes require a service restart", err)
 	}
-	return checkInterfaces(next)
+	if err := checkInterfaces(next); err != nil {
+		return apperror.Wrap(apperror.CodeReloadRejected, "service.reload", "reload prerequisites are not satisfied", err)
+	}
+	return nil
 }
 
 func checkPaths(runtime *config.Config, ownership pathOwnership) error {
