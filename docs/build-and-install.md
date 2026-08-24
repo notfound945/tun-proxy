@@ -337,6 +337,11 @@ sudo tun-proxy service install -start-at-boot=true
 `-start-at-boot=true` 还会启用 launchd 的异常退出自动重启。默认关闭时，plist 中的
 `RunAtLoad` 为 `false`，且不会包含会隐式触发开机运行的 `KeepAlive`。
 
+`/var/run` 会在 macOS 重启时被清理。托管 supervisor 每次启动都会先验证 `_tun-proxy`
+专用账户及 root-owned `/var/run/tun-proxy`，然后仅在
+`/var/run/tun-proxy/worker` 确实缺失时以 `_tun-proxy:_tun-proxy`、`0700` 安全重建它。
+已有的符号链接、异常所有者或异常权限不会被自动修改，服务会拒绝启动并记录明确错误。
+
 仅在首次安装或完整卸载后使用 `service install`。已经安装 LaunchDaemon 时使用升级命令。
 
 ## 9. 验证和日常控制
@@ -463,9 +468,10 @@ curl -fsSL \
   env START_SERVICE=1 bash
 ```
 
-如果 `service status` 报告 `/var/run/tun-proxy/worker` 不存在，而 `service install` 又报告
-launchd label 已加载，表示现有服务的易失 worker 运行目录丢失。不要重复安装或执行 purge；
-直接执行上面的 `env START_SERVICE=1 bash` 更新命令，由事务升级重新准备存储并启动服务。
+如果旧版 `service status` 报告 `/var/run/tun-proxy/worker` 不存在，而 `service install` 又报告
+launchd label 已加载，表示现有服务的易失 worker 运行目录在重启后丢失。不要重复安装或执行
+purge；直接执行上面的 `env START_SERVICE=1 bash` 更新命令，由事务升级重新准备存储并启动
+服务。升级后的 supervisor 会在后续重启时自动恢复缺失的易失 worker 目录。
 
 脚本也可以单独下载执行；`INSTALL_RELEASE_SCRIPT` 可指定本地安装器，未指定且同目录中没有
 安装器时，会从 `TUN_PROXY_REPOSITORY` 的 `TUN_PROXY_INSTALLER_REF` 下载。

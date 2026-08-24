@@ -72,6 +72,9 @@ func RunServiceSupervisor(ctx context.Context, configPath string, layout launchs
 	if err != nil {
 		return err
 	}
+	if err := launchservice.PrepareEphemeralWorkerRuntime(layout, 0, identity); err != nil {
+		return fmt.Errorf("prepare managed worker runtime: %w", err)
+	}
 	if err := launchservice.ValidateWorkerStorage(layout, identity); err != nil {
 		return err
 	}

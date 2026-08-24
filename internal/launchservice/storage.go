@@ -27,12 +27,19 @@ type storageTransaction struct {
 	active      bool
 }
 
+func validateWorkerIdentity(layout Layout, identity privsep.Identity) error {
+	if identity.User != layout.WorkerUser || identity.Group != layout.WorkerGroup || identity.UID == 0 || identity.GID == 0 {
+		return fmt.Errorf("invalid managed worker identity %+v", identity)
+	}
+	return nil
+}
+
 func prepareWorkerStorage(layout Layout, rootUID int, identity privsep.Identity) (*storageTransaction, error) {
 	if err := layout.Validate(); err != nil {
 		return nil, err
 	}
-	if identity.User != layout.WorkerUser || identity.Group != layout.WorkerGroup || identity.UID == 0 || identity.GID == 0 {
-		return nil, fmt.Errorf("invalid managed worker identity %+v", identity)
+	if err := validateWorkerIdentity(layout, identity); err != nil {
+		return nil, err
 	}
 	transaction := &storageTransaction{workerUID: int(identity.UID), workerGID: int(identity.GID), active: true}
 	fail := func(err error) (*storageTransaction, error) {
@@ -51,6 +58,76 @@ func prepareWorkerStorage(layout Layout, rootUID int, identity privsep.Identity)
 	return transaction, nil
 }
 
+// PrepareEphemeralWorkerRuntime recreates the worker-owned runtime directory
+// after /var/run has been cleared by a reboot. Existing paths are never
+// migrated here: a symlink, unexpected owner or permissive mode remains a hard
+// failure so service startup cannot silently adopt attacker-controlled state.
+func PrepareEphemeralWorkerRuntime(layout Layout, rootUID int, identity privsep.Identity) (resultErr error) {
+	if err := layout.Validate(); err != nil {
+		return err
+	}
+	if err := validateWorkerIdentity(layout, identity); err != nil {
+		return err
+	}
+	if err := ensureDirectory(layout.RuntimeDir, 0o755, rootUID); err != nil {
+		return err
+	}
+
+	_, err := os.Lstat(layout.WorkerDir)
+	if err == nil {
+		return validateWorkerDirectory(layout.WorkerDir, 0o700, identity)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect worker runtime %q: %w", layout.WorkerDir, err)
+	}
+
+	if err := os.Mkdir(layout.WorkerDir, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return validateWorkerDirectory(layout.WorkerDir, 0o700, identity)
+		}
+		return fmt.Errorf("create worker runtime %q: %w", layout.WorkerDir, err)
+	}
+	created := true
+	defer func() {
+		if resultErr == nil || !created {
+			return
+		}
+		if err := os.Remove(layout.WorkerDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove incomplete worker runtime %q: %w", layout.WorkerDir, err))
+		}
+	}()
+	if err := os.Chown(layout.WorkerDir, int(identity.UID), int(identity.GID)); err != nil {
+		return fmt.Errorf("chown worker runtime %q: %w", layout.WorkerDir, err)
+	}
+	if err := os.Chmod(layout.WorkerDir, 0o700); err != nil {
+		return fmt.Errorf("chmod worker runtime %q: %w", layout.WorkerDir, err)
+	}
+	if err := validateWorkerDirectory(layout.WorkerDir, 0o700, identity); err != nil {
+		return err
+	}
+	created = false
+	return nil
+}
+
+func validateWorkerDirectory(path string, mode os.FileMode, identity privsep.Identity) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect worker storage %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("worker storage %q has unsafe file type %v", path, info.Mode())
+	}
+	uid, gid, err := fileOwner(info)
+	if err != nil {
+		return fmt.Errorf("inspect worker storage owner %q: %w", path, err)
+	}
+	if uid != int(identity.UID) || gid != int(identity.GID) || info.Mode().Perm() != mode {
+		return fmt.Errorf("worker storage %q has uid=%d gid=%d mode=%04o, want uid=%d gid=%d mode=%04o",
+			path, uid, gid, info.Mode().Perm(), identity.UID, identity.GID, mode)
+	}
+	return nil
+}
+
 func validateWorkerStorage(layout Layout, identity privsep.Identity) error {
 	if err := layout.Validate(); err != nil {
 		return err
@@ -63,6 +140,12 @@ func validateWorkerStorage(layout Layout, identity privsep.Identity) error {
 		{layout.WorkerDir, 0o700, true}, {layout.DataDir, 0o700, true},
 		{layout.FakeIPv4, 0o600, false}, {layout.FakeIPv6, 0o600, false},
 	} {
+		if item.dir && item.path == layout.WorkerDir {
+			if err := validateWorkerDirectory(item.path, item.mode, identity); err != nil {
+				return err
+			}
+			continue
+		}
 		info, err := os.Lstat(item.path)
 		if errors.Is(err, os.ErrNotExist) && !item.dir {
 			continue

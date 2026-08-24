@@ -93,16 +93,18 @@ curl -fsSL \
   env UPDATE_SERVICE_CONFIG=1 bash
 ```
 
-如果先后看到以下两个错误：
+如果旧版托管服务在机器重启后先后出现以下两个错误：
 
 ```text
 inspect worker storage "/var/run/tun-proxy/worker": ... no such file or directory
 launchd service label is already loaded
 ```
 
-说明托管服务和 launchd job 已经存在，但易失的 worker 运行目录缺失。此时不要重复执行
-`service install`，也不需要 `uninstall -purge`；更新脚本中的 `service upgrade` 会重新准备
-托管存储。可同时要求更新后启动服务：
+说明托管服务和 launchd job 已经存在，但易失的 worker 运行目录缺失。新版 supervisor 会在
+验证 `_tun-proxy` 专用账户和 root-owned 运行目录后，安全重建缺失的
+`/var/run/tun-proxy/worker`；已经存在但类型、所有者或权限异常的路径仍会被拒绝，不会被静默
+接管。旧版遇到该错误时不要重复执行 `service install`，也不需要 `uninstall -purge`；更新脚本
+中的 `service upgrade` 会重新准备托管存储。可同时要求更新后启动服务：
 
 ```bash
 curl -fsSL \
