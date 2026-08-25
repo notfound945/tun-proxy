@@ -60,9 +60,11 @@ Phase 9 adds the CLI operations and diagnostics documented in
 [`../phases/phase9-cli-operations.md`](../phases/phase9-cli-operations.md).
 The CLI is the only planned configuration, diagnostics, and service-management
 interface; no graphical management interface is planned. Managed configuration
-synchronization is separate from hot reload: `service sync-user-config` keeps a
-stopped service stopped or restarts a running service with rollback, while
-`service reload` remains available only to a running service. Managed reload now
+synchronization is performed by `service start`, which validates and synchronizes
+the invoking user's configuration before startup, while `service reload` remains
+available only to a running service. The `-use-last-config` fallback can continue
+with the last successfully synchronized managed configuration when the new user
+configuration cannot be applied. Managed reload now
 uses the root-only `/var/run/tun-proxy/control.sock`, sends an expected config
 digest plus a 128-bit external reload request ID, and waits for the final
 supervisor/worker result. Transport retries reuse the same ID and recover a

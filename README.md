@@ -158,7 +158,6 @@ tun-proxy config -finder
 sudo tun-proxy service stop
 sudo tun-proxy service start
 sudo tun-proxy service restart
-sudo tun-proxy service sync-user-config
 sudo tun-proxy service reload
 sudo tun-proxy service logs -follow
 sudo tun-proxy status -fake-ip
@@ -347,15 +346,20 @@ sudo tun-proxy service install
 ```
 
 服务安装后，CLI 用户配置和 LaunchDaemon 托管配置是两份独立文件。再次修改
-`~/.config/tun-proxy/config.yaml` 后，可以同步完整配置：
+`~/.config/tun-proxy/config.yaml` 后，直接执行 `service start` 即可完成完整配置的校验、同步和启动：
 
 ```sh
-sudo tun-proxy service sync-user-config
+sudo tun-proxy service start
 ```
 
-该命令会根据 `SUDO_USER` 自动选择调用 `sudo` 的用户配置，无需填写完整路径。服务未运行时，
-校验通过后会原子替换托管配置并保持停止；服务正在运行时，会停止服务、替换配置并重新启动，
-等待服务就绪。新配置启动失败时会回滚托管配置，并尝试恢复原服务。
+`service start` 会根据 `SUDO_USER` 自动选择调用 `sudo` 的用户配置，无需填写完整路径。用户配置
+校验失败、同步失败或服务无法就绪时，命令会输出警告、保留错误并退出；同步期间的启动失败会回滚
+托管配置并尝试恢复原服务。若希望在用户配置暂时不可用时继续使用上一次同步成功的托管配置，
+可以显式使用：
+
+```sh
+sudo tun-proxy service start -use-last-config
+```
 
 只修改可热重载字段、且服务正在运行时，可以避免重启：
 
@@ -377,8 +381,9 @@ root 访问的 `/var/run/tun-proxy/control.sock` 请求 supervisor reload，并�
 control 断线时会以同一 ID 安全重试并恢复缓存结果。运行时拒绝、超时或配置摘要不一致时，会回滚
 托管配置；rollback 使用新的 request ID、相同 operation ID 和 `rollback_of`，再通过同一 control
 socket 确认原有运行配置已经恢复。`SIGHUP` 仅保留为会自动生成关联 ID 的手工兼容入口。
-启动失败后需要修正错误网口等完整配置时，应使用 `service sync-user-config`，然后在服务仍停止时
-执行 `sudo tun-proxy service start`。
+启动失败后需要修正错误网口等完整配置时，修改用户配置后重新执行
+`sudo tun-proxy service start` 即可；如需暂时使用上一次成功同步的托管配置，可加
+`-use-last-config`。
 
 ## 文档
 

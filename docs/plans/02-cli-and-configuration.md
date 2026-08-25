@@ -61,7 +61,6 @@ sudo tun-proxy service status
 sudo tun-proxy service start
 sudo tun-proxy service stop
 sudo tun-proxy service restart
-sudo tun-proxy service sync-user-config
 sudo tun-proxy service reload -timeout 15s
 sudo tun-proxy service logs -lines 200
 sudo tun-proxy service upgrade
@@ -71,7 +70,7 @@ sudo tun-proxy service uninstall
 托管模式由 root supervisor 持有 utun、53 端口 listener、路由、系统 DNS 和恢复状态，
 由专用非 root `_tun-proxy` worker 运行 Fake DNS、Fake IP、规则、resolver、gVisor、TCP/UDP
 relay 和 status socket。`check -service` 用于验证这套固定路径、账号和分离所有权。
-`service install`、`upgrade`、`sync-user-config`、`reload` 和 `uninstall` 都按事务处理；普通 uninstall 默认保留
+`service install`、`start`、`upgrade`、`reload` 和 `uninstall` 都按事务处理；普通 uninstall 默认保留
 配置、映射和日志，只有显式 `-purge` 才删除托管数据。
 
 ## 2. YAML 示例
@@ -234,7 +233,7 @@ rules:
 sudo tun-proxy service reload
 sudo tun-proxy service reload -user-config
 sudo tun-proxy service reload -config ./config.yaml -timeout 15s
-sudo tun-proxy service sync-user-config
+sudo tun-proxy service start
 ```
 
 服务运行时，托管 reload 会先校验并事务性安装配置，再通过 root-only
@@ -246,9 +245,10 @@ sudo tun-proxy service sync-user-config
 DNS 查询和 TCP/UDP 流，已有流保留其原 generation、规则决定和出口。`service reload` 无论
 是否带配置参数都要求服务处于 `running` 阶段。
 
-`service sync-user-config` 安全读取并校验调用用户的默认配置。服务停止时，它会先卸载仍注册的
-launchd job，原子同步配置并保持停止；服务运行时，它会先停止服务，再同步配置并重新启动。
-新配置启动失败时会回滚托管配置并尝试恢复旧服务。该路径可以修正 TUN、网口等通常不可热
+`service start` 会在启动前安全读取并校验调用用户的默认配置。服务停止时，它会先卸载仍注册的
+launchd job，原子同步配置并启动；服务运行时，它会先停止服务，再同步配置并重新启动。
+新配置启动失败时会回滚托管配置并尝试恢复旧服务；`-use-last-config` 可在新配置失败时继续使用
+上一次成功同步的托管配置。该路径可以修正 TUN、网口等通常不可热
 重载的字段，也可以解除错误配置造成的启动失败。
 
 可热更新的内容包括规则、日志配置、`fake_ip.dns_ttl`/排除项、默认 DNS 出口、上游 DNS、

@@ -61,8 +61,6 @@ func serviceCommand(args []string) (resultErr error) {
 		}
 		fmt.Println("tun-proxy service restarted")
 		return nil
-	case "sync-user-config":
-		return serviceSyncUserConfigCommand(ctx, manager, args[1:])
 	case "reload":
 		return serviceReloadCommand(ctx, manager, args[1:])
 	case "status":
@@ -91,8 +89,6 @@ func serviceOperationKind(command string) (launchservice.OperationKind, bool) {
 		return launchservice.OperationStop, true
 	case "restart":
 		return launchservice.OperationRestart, true
-	case "sync-user-config":
-		return launchservice.OperationSyncUserConfig, true
 	case "reload":
 		return launchservice.OperationReload, true
 	case "upgrade":
@@ -112,9 +108,146 @@ type serviceStarter interface {
 	Start(context.Context) error
 }
 
+type serviceStartOptions struct {
+	useLastConfig bool
+}
+
+func newServiceStartFlagSet(output io.Writer, options *serviceStartOptions) *flag.FlagSet {
+	if options == nil {
+		options = &serviceStartOptions{}
+	}
+	flags := newCommandFlagSet("service start", output)
+	flags.BoolVar(&options.useLastConfig, "use-last-config", false, "use the last successfully synchronized managed configuration if user synchronization fails")
+	return flags
+}
+
+type serviceConfigSynchronizer interface {
+	SynchronizeConfig(context.Context, []byte) (launchservice.ConfigSyncResult, error)
+}
+
+// serviceStartConfigManager is the subset of the managed-service manager used
+// by service start. Keeping the synchronization step here makes start the
+// single normal entry point for applying the invoking user's configuration.
+type serviceStartConfigManager interface {
+	serviceStarter
+	serviceConfigSynchronizer
+}
+
+func serviceStartWithConfigCommand(
+	ctx context.Context,
+	manager serviceStartConfigManager,
+	managedConfigPath string,
+	args []string,
+) error {
+	options := serviceStartOptions{}
+	flags := newServiceStartFlagSet(os.Stderr, &options)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("service start received unexpected arguments: %s", strings.Join(flags.Args(), " "))
+	}
+
+	var previous []byte
+	var previousErr error
+	if options.useLastConfig {
+		_, previous, _, _, previousErr = loadValidatedConfigSource(managedConfigPath)
+	}
+
+	source := defaultUserConfigPath()
+	_, contents, _, _, err := loadValidatedConfigSource(source)
+	if err != nil {
+		return finishServiceStartFailure(
+			ctx,
+			manager,
+			previous,
+			previousErr,
+			false,
+			fmt.Errorf("validate user configuration before service start: %w", err),
+			options.useLastConfig,
+		)
+	}
+
+	syncResult, err := manager.SynchronizeConfig(ctx, contents)
+	if err != nil {
+		return finishServiceStartFailure(
+			ctx,
+			manager,
+			previous,
+			previousErr,
+			true,
+			fmt.Errorf("synchronize user configuration before service start: %w", err),
+			options.useLastConfig,
+		)
+	}
+	if syncResult.Restarted {
+		fmt.Printf("tun-proxy service started with synchronized user configuration: %s\n", source)
+		return nil
+	}
+	if err := manager.Start(ctx); err != nil {
+		return finishServiceStartFailure(
+			ctx,
+			manager,
+			previous,
+			previousErr,
+			true,
+			fmt.Errorf("start service with synchronized user configuration: %w", err),
+			options.useLastConfig,
+		)
+	}
+	fmt.Printf("tun-proxy service started with synchronized user configuration: %s\n", source)
+	return nil
+}
+
+func finishServiceStartFailure(
+	ctx context.Context,
+	manager serviceStartConfigManager,
+	previous []byte,
+	previousErr error,
+	restorePrevious bool,
+	cause error,
+	useLastConfig bool,
+) error {
+	if !useLastConfig {
+		return warnServiceStartFailure(cause)
+	}
+	if previousErr != nil {
+		return warnServiceStartFailure(errors.Join(cause, fmt.Errorf("validate last successfully synchronized managed configuration: %w", previousErr)))
+	}
+	if len(previous) == 0 {
+		return warnServiceStartFailure(errors.Join(cause, errors.New("last successfully synchronized managed configuration is empty")))
+	}
+	if restorePrevious {
+		if result, err := manager.SynchronizeConfig(ctx, previous); err != nil {
+			return warnServiceStartFailure(errors.Join(cause, fmt.Errorf("restore last successfully synchronized managed configuration: %w", err)))
+		} else if result.Restarted {
+			fmt.Fprintln(os.Stderr, "WARN user configuration could not be synchronized; continuing with the last successfully synchronized managed configuration")
+			fmt.Println("tun-proxy service started with the last successfully synchronized managed configuration")
+			return nil
+		}
+	}
+	if err := manager.Start(ctx); err != nil {
+		return warnServiceStartFailure(errors.Join(cause, fmt.Errorf("start service with last successfully synchronized managed configuration: %w", err)))
+	}
+	fmt.Fprintln(os.Stderr, "WARN user configuration could not be synchronized; continuing with the last successfully synchronized managed configuration")
+	fmt.Println("tun-proxy service started with the last successfully synchronized managed configuration")
+	return nil
+}
+
+func warnServiceStartFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "WARN service start aborted: %v\n", err)
+	return withServiceLogsHint(err)
+}
+
 func serviceStartCommand(ctx context.Context, starter serviceStarter, args []string) error {
 	if hasOnlyHelpArgument(args) {
 		return helpCommand([]string{"service", "start"})
+	}
+	if manager, ok := starter.(serviceStartConfigManager); ok {
+		return serviceStartWithConfigCommand(ctx, manager, launchservice.DefaultLayout().Config, args)
 	}
 	if len(args) != 0 {
 		return errors.New("service start does not accept arguments")
@@ -141,35 +274,6 @@ func serviceStopCommand(ctx context.Context, stopper serviceStopper, args []stri
 		return withServiceLogsHint(err)
 	}
 	fmt.Println("tun-proxy service stopped and unloaded")
-	return nil
-}
-
-type serviceConfigSynchronizer interface {
-	SynchronizeConfig(context.Context, []byte) (launchservice.ConfigSyncResult, error)
-}
-
-func serviceSyncUserConfigCommand(ctx context.Context, synchronizer serviceConfigSynchronizer, args []string) error {
-	if hasOnlyHelpArgument(args) {
-		return helpCommand([]string{"service", "sync-user-config"})
-	}
-	if len(args) != 0 {
-		return errors.New("service sync-user-config does not accept arguments")
-	}
-	source := defaultUserConfigPath()
-	source, contents, _, _, err := loadValidatedConfigSource(source)
-	if err != nil {
-		return fmt.Errorf("validate user configuration before synchronization: %w", err)
-	}
-	result, err := synchronizer.SynchronizeConfig(ctx, contents)
-	if err != nil {
-		return withServiceLogsHint(fmt.Errorf("synchronize user configuration: %w", err))
-	}
-	fmt.Printf("user configuration synchronized: %s\n", source)
-	if result.Restarted {
-		fmt.Println("tun-proxy service restarted with the synchronized configuration")
-	} else {
-		fmt.Printf("tun-proxy service remains stopped; run %q to start it\n", launchservice.StartCommand)
-	}
 	return nil
 }
 

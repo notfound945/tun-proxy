@@ -28,15 +28,14 @@ var ErrOperationBusy = errors.New("service operation is already in progress")
 type OperationKind string
 
 const (
-	OperationInstall        OperationKind = "install"
-	OperationStart          OperationKind = "start"
-	OperationStop           OperationKind = "stop"
-	OperationRestart        OperationKind = "restart"
-	OperationSyncUserConfig OperationKind = "sync-user-config"
-	OperationReload         OperationKind = "reload"
-	OperationUpgrade        OperationKind = "upgrade"
-	OperationUninstall      OperationKind = "uninstall"
-	OperationCleanup        OperationKind = "cleanup"
+	OperationInstall   OperationKind = "install"
+	OperationStart     OperationKind = "start"
+	OperationStop      OperationKind = "stop"
+	OperationRestart   OperationKind = "restart"
+	OperationReload    OperationKind = "reload"
+	OperationUpgrade   OperationKind = "upgrade"
+	OperationUninstall OperationKind = "uninstall"
+	OperationCleanup   OperationKind = "cleanup"
 )
 
 type OperationSpec struct {
@@ -151,7 +150,7 @@ func (manager *Manager) BeginOperation(ctx context.Context, spec OperationSpec) 
 func validOperationKind(kind OperationKind) bool {
 	switch kind {
 	case OperationInstall, OperationStart, OperationStop, OperationRestart,
-		OperationSyncUserConfig, OperationReload, OperationUpgrade,
+		OperationReload, OperationUpgrade,
 		OperationUninstall, OperationCleanup:
 		return true
 	default:

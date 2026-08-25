@@ -366,7 +366,6 @@ sudo tun-proxy diagnose
 sudo tun-proxy service start
 sudo tun-proxy service stop
 sudo tun-proxy service restart
-sudo tun-proxy service sync-user-config
 sudo tun-proxy service reload
 sudo tun-proxy service logs -lines 100
 sudo tun-proxy service logs -follow -stream both
@@ -383,27 +382,26 @@ sudo tun-proxy service logs -clear -follow
 `service stop` 会回滚运行期间的系统状态，禁用并卸载 launchd job，以阻止 `KeepAlive`
 再次拉起进程，但会保留安装；后续 `service start` 会重新启用并加载 job。`service reload`
 仅供运行中的服务热更新可重载配置；它通过 root-only `/var/run/tun-proxy/control.sock` 发送期望
-配置摘要并等待 worker 最终结果，不再根据 status counters 猜测成功或失败。`service sync-user-config`
-会同步完整用户配置，服务已运行时执行重启，服务未运行时保持停止。日志跟随可通过 `Ctrl-C`
+配置摘要并等待 worker 最终结果，不再根据 status counters 猜测成功或失败。`service start` 会在启动前
+自动校验并同步完整用户配置，服务已运行时执行重启，服务未运行时完成同步后启动。日志跟随可通过 `Ctrl-C`
 退出，不会停止服务。`service logs -clear` 会清空
 stdout 和 stderr，使用 `-stream stdout|stderr` 可只清理指定日志；与 `-follow` 组合时会
 先清空再等待新日志。
 
-CLI 默认编辑的用户配置与 LaunchDaemon 读取的托管配置是两份独立文件。修改用户配置后，
-使用下面的命令完成校验、事务同步，并在原来处于运行状态时重启服务：
+CLI 默认编辑的用户配置与 LaunchDaemon 读取的托管配置是两份独立文件。修改用户配置后，直接执行
+下面的命令即可完成校验、事务同步并启动服务：
 
 ```sh
-tun-proxy config validate
-sudo tun-proxy service sync-user-config
+sudo tun-proxy service start
 ```
 
-`sync-user-config` 会根据 `SUDO_USER` 选择调用者的
-`~/.config/tun-proxy/config.yaml`，无需手动展开完整路径。其他配置文件可以使用
+`service start` 会根据 `SUDO_USER` 选择调用者的 `~/.config/tun-proxy/config.yaml`，无需手动展开
+完整路径。校验、同步或启动失败时会输出警告并退出；如果暂时需要使用上一次成功同步的托管配置，
+可以使用 `sudo tun-proxy service start -use-last-config`。其他配置文件可以使用
 `service upgrade -config /path/to/config.yaml` 事务性同步。
 
-配置会同步到 `/Library/Application Support/tun-proxy/config.yaml`。服务运行时，命令会先停止
-服务，再替换配置并启动；新配置无法启动时会回滚并尝试恢复旧服务。服务未运行时，校验并原子
-替换托管配置，同时保持停止；随后可执行 `sudo tun-proxy service start`。
+配置会同步到 `/Library/Application Support/tun-proxy/config.yaml`。服务运行时，命令会先停止服务，再
+替换配置并启动；新配置无法启动时会回滚并尝试恢复旧服务。
 
 只修改规则、日志级别等可热更新字段时，可在服务运行期间使用：
 

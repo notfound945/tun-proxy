@@ -90,6 +90,200 @@ func TestServiceStartCommandRejectsArgumentsWithoutLogsHint(t *testing.T) {
 	}
 }
 
+type serviceStartConfigManagerStub struct {
+	startCalls int
+	syncCalls  [][]byte
+	start      func() error
+	sync       func([]byte) (launchservice.ConfigSyncResult, error)
+}
+
+func (stub *serviceStartConfigManagerStub) Start(context.Context) error {
+	stub.startCalls++
+	if stub.start == nil {
+		return nil
+	}
+	return stub.start()
+}
+
+func (stub *serviceStartConfigManagerStub) SynchronizeConfig(_ context.Context, contents []byte) (launchservice.ConfigSyncResult, error) {
+	stub.syncCalls = append(stub.syncCalls, append([]byte(nil), contents...))
+	if stub.sync == nil {
+		return launchservice.ConfigSyncResult{}, nil
+	}
+	return stub.sync(contents)
+}
+
+func writeServiceStartConfig(t *testing.T, home, contents string) string {
+	t.Helper()
+	path := filepath.Join(home, ".config", "tun-proxy", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestServiceStartWithConfigSynchronizesBeforeStarting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	contents, err := os.ReadFile("../../configs/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeServiceStartConfig(t, home, string(contents))
+
+	manager := &serviceStartConfigManagerStub{}
+	var order []string
+	manager.sync = func(got []byte) (launchservice.ConfigSyncResult, error) {
+		order = append(order, "sync")
+		if !bytes.Equal(got, contents) {
+			t.Fatalf("synchronized contents differ from user config")
+		}
+		return launchservice.ConfigSyncResult{}, nil
+	}
+	manager.start = func() error {
+		order = append(order, "start")
+		return nil
+	}
+
+	err = serviceStartWithConfigCommand(context.Background(), manager, filepath.Join(t.TempDir(), "managed.yaml"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(order, ","), "sync,start"; got != want {
+		t.Fatalf("start order = %q, want %q", got, want)
+	}
+}
+
+func TestServiceStartWithConfigAbortsWhenUserConfigIsInvalid(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	writeServiceStartConfig(t, home, "version: 1\nnot_a_config: true\n")
+
+	manager := &serviceStartConfigManagerStub{}
+	err := serviceStartWithConfigCommand(context.Background(), manager, filepath.Join(t.TempDir(), "managed.yaml"), nil)
+	if err == nil || !strings.Contains(err.Error(), "validate user configuration before service start") {
+		t.Fatalf("serviceStartWithConfigCommand() error = %v", err)
+	}
+	if manager.startCalls != 0 || len(manager.syncCalls) != 0 {
+		t.Fatalf("service started/synchronized after invalid user config: starts=%d syncs=%d", manager.startCalls, len(manager.syncCalls))
+	}
+}
+
+func TestServiceStartWithConfigCanUseLastManagedConfigAfterUserValidationFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	writeServiceStartConfig(t, home, "version: 1\nnot_a_config: true\n")
+	managedPath := filepath.Join(t.TempDir(), "managed.yaml")
+	contents, err := os.ReadFile("../../configs/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managedPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := &serviceStartConfigManagerStub{}
+
+	err = serviceStartWithConfigCommand(context.Background(), manager, managedPath, []string{"-use-last-config"})
+	if err != nil {
+		t.Fatalf("serviceStartWithConfigCommand() error = %v", err)
+	}
+	if manager.startCalls != 1 || len(manager.syncCalls) != 0 {
+		t.Fatalf("unexpected fallback calls: starts=%d syncs=%d", manager.startCalls, len(manager.syncCalls))
+	}
+}
+
+func TestServiceStartWithConfigCanUseLastManagedConfigAfterSyncFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	contents, err := os.ReadFile("../../configs/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeServiceStartConfig(t, home, string(contents))
+	managedPath := filepath.Join(t.TempDir(), "managed.yaml")
+	if err := os.WriteFile(managedPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantSyncErr := errors.New("sync failed")
+	manager := &serviceStartConfigManagerStub{}
+	manager.sync = func(_ []byte) (launchservice.ConfigSyncResult, error) {
+		if len(manager.syncCalls) == 1 {
+			return launchservice.ConfigSyncResult{}, wantSyncErr
+		}
+		return launchservice.ConfigSyncResult{}, nil
+	}
+
+	err = serviceStartWithConfigCommand(context.Background(), manager, managedPath, []string{"-use-last-config"})
+	if err != nil {
+		t.Fatalf("serviceStartWithConfigCommand() error = %v", err)
+	}
+	if manager.startCalls != 1 {
+		t.Fatalf("start calls = %d, want 1", manager.startCalls)
+	}
+	if len(manager.syncCalls) != 2 {
+		t.Fatalf("sync calls = %d, want failed user sync plus managed-config restore", len(manager.syncCalls))
+	}
+}
+
+func TestServiceStartWithConfigCanUseLastManagedConfigAfterStartFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	contents, err := os.ReadFile("../../configs/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeServiceStartConfig(t, home, string(contents))
+	managedPath := filepath.Join(t.TempDir(), "managed.yaml")
+	if err := os.WriteFile(managedPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantStartErr := errors.New("start failed")
+	manager := &serviceStartConfigManagerStub{}
+	manager.start = func() error {
+		if manager.startCalls == 1 {
+			return wantStartErr
+		}
+		return nil
+	}
+
+	err = serviceStartWithConfigCommand(context.Background(), manager, managedPath, []string{"-use-last-config"})
+	if err != nil {
+		t.Fatalf("serviceStartWithConfigCommand() error = %v", err)
+	}
+	if manager.startCalls != 2 || len(manager.syncCalls) != 2 {
+		t.Fatalf("unexpected fallback calls: starts=%d syncs=%d", manager.startCalls, len(manager.syncCalls))
+	}
+}
+
+func TestServiceStartWithConfigAbortsAfterStartFailureWithoutFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	contents, err := os.ReadFile("../../configs/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeServiceStartConfig(t, home, string(contents))
+	wantStartErr := errors.New("start failed")
+	manager := &serviceStartConfigManagerStub{start: func() error { return wantStartErr }}
+
+	err = serviceStartWithConfigCommand(context.Background(), manager, filepath.Join(t.TempDir(), "managed.yaml"), nil)
+	if !errors.Is(err, wantStartErr) {
+		t.Fatalf("serviceStartWithConfigCommand() error = %v, want %v", err, wantStartErr)
+	}
+	if len(manager.syncCalls) != 1 || manager.startCalls != 1 {
+		t.Fatalf("unexpected calls after start failure: syncs=%d starts=%d", len(manager.syncCalls), manager.startCalls)
+	}
+}
+
 type serviceStopperFunc func(context.Context) error
 
 func (stop serviceStopperFunc) Stop(ctx context.Context) error {
@@ -123,88 +317,6 @@ func TestServiceStopCommandRejectsArgumentsWithoutLogsHint(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), serviceLogsHintCommand) {
 		t.Fatalf("argument error unexpectedly included logs hint: %q", err)
-	}
-}
-
-type serviceConfigSynchronizerFunc func(context.Context, []byte) (launchservice.ConfigSyncResult, error)
-
-func (synchronize serviceConfigSynchronizerFunc) SynchronizeConfig(ctx context.Context, contents []byte) (launchservice.ConfigSyncResult, error) {
-	return synchronize(ctx, contents)
-}
-
-func TestServiceSyncUserConfigValidatesAndSynchronizesDefaultPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("SUDO_USER", "")
-	contents, err := os.ReadFile("../../configs/config.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(home, ".config", "tun-proxy", "config.yaml")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, contents, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	called := false
-	err = serviceSyncUserConfigCommand(context.Background(), serviceConfigSynchronizerFunc(func(_ context.Context, got []byte) (launchservice.ConfigSyncResult, error) {
-		called = true
-		if !bytes.Equal(got, contents) {
-			t.Fatal("synchronized payload differs from validated user configuration")
-		}
-		return launchservice.ConfigSyncResult{Restarted: true}, nil
-	}), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !called {
-		t.Fatal("validated user configuration was not synchronized")
-	}
-}
-
-func TestServiceSyncUserConfigRejectsArgumentsBeforeSynchronizing(t *testing.T) {
-	called := false
-	err := serviceSyncUserConfigCommand(context.Background(), serviceConfigSynchronizerFunc(func(context.Context, []byte) (launchservice.ConfigSyncResult, error) {
-		called = true
-		return launchservice.ConfigSyncResult{}, nil
-	}), []string{"unexpected"})
-	if err == nil || !strings.Contains(err.Error(), "does not accept arguments") {
-		t.Fatalf("serviceSyncUserConfigCommand() error = %v", err)
-	}
-	if called {
-		t.Fatal("configuration synchronized before rejecting arguments")
-	}
-	if strings.Contains(err.Error(), serviceLogsHintCommand) {
-		t.Fatalf("argument error unexpectedly included logs hint: %q", err)
-	}
-}
-
-func TestServiceSyncUserConfigAddsLogsHintOnRestartFailure(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("SUDO_USER", "")
-	contents, err := os.ReadFile("../../configs/config.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(home, ".config", "tun-proxy", "config.yaml")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, contents, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	want := errors.New("service did not become ready")
-	err = serviceSyncUserConfigCommand(context.Background(), serviceConfigSynchronizerFunc(func(context.Context, []byte) (launchservice.ConfigSyncResult, error) {
-		return launchservice.ConfigSyncResult{}, want
-	}), nil)
-	if !errors.Is(err, want) {
-		t.Fatalf("serviceSyncUserConfigCommand() error = %v, want wrapped %v", err, want)
-	}
-	if !strings.Contains(err.Error(), serviceLogsHintCommand) {
-		t.Fatalf("serviceSyncUserConfigCommand() error = %q, want logs hint", err)
 	}
 }
 
@@ -374,14 +486,13 @@ func TestManagedServiceProcessDetection(t *testing.T) {
 
 func TestServiceOperationKindCoversEveryManagedMutation(t *testing.T) {
 	want := map[string]launchservice.OperationKind{
-		"install":          launchservice.OperationInstall,
-		"start":            launchservice.OperationStart,
-		"stop":             launchservice.OperationStop,
-		"restart":          launchservice.OperationRestart,
-		"sync-user-config": launchservice.OperationSyncUserConfig,
-		"reload":           launchservice.OperationReload,
-		"upgrade":          launchservice.OperationUpgrade,
-		"uninstall":        launchservice.OperationUninstall,
+		"install":   launchservice.OperationInstall,
+		"start":     launchservice.OperationStart,
+		"stop":      launchservice.OperationStop,
+		"restart":   launchservice.OperationRestart,
+		"reload":    launchservice.OperationReload,
+		"upgrade":   launchservice.OperationUpgrade,
+		"uninstall": launchservice.OperationUninstall,
 	}
 	for command, wantKind := range want {
 		got, ok := serviceOperationKind(command)
@@ -389,10 +500,16 @@ func TestServiceOperationKindCoversEveryManagedMutation(t *testing.T) {
 			t.Errorf("serviceOperationKind(%q) = %q, %t; want %q, true", command, got, ok, wantKind)
 		}
 	}
-	for _, command := range []string{"status", "logs", "help", "unknown"} {
+	for _, command := range []string{"status", "logs", "help", "unknown", "sync-user-config"} {
 		if got, ok := serviceOperationKind(command); ok {
 			t.Errorf("serviceOperationKind(%q) = %q, true; want no lock", command, got)
 		}
+	}
+}
+
+func TestRemovedSyncUserConfigCommandIsUnknown(t *testing.T) {
+	if err := serviceCommand([]string{"sync-user-config"}); err == nil || !strings.Contains(err.Error(), "unknown service command") {
+		t.Fatalf("serviceCommand(sync-user-config) error = %v, want unknown command", err)
 	}
 }
 

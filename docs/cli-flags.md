@@ -334,7 +334,7 @@ sudo tun-proxy service install -start-at-boot=true
 ### 托管服务操作互斥
 
 所有会修改托管服务或托管配置的命令——`install`、`start`、`stop`、`restart`、
-`sync-user-config`、`reload`、`upgrade` 和 `uninstall`——都会在完整事务期间持有独立的跨进程
+`reload`、`upgrade` 和 `uninstall`——都会在完整事务期间持有独立的跨进程
 operation lock：`/var/run/tun-proxy.service-operation.lock`。使用默认托管 state/lock 路径的
 `cleanup` 也使用同一把锁；显式指定独立 state/lock 的 standalone cleanup 不会获取它。
 
@@ -347,10 +347,20 @@ progress”，并在 metadata 可用时附带操作类型、operation ID、PID �
 
 ```sh
 sudo tun-proxy service start
+sudo tun-proxy service start -use-last-config
 ```
 
-启动已安装的服务并等待就绪，最长等待 20 秒。该命令没有参数。启动失败（包括等待就绪超时）时，
-错误信息会提示运行 `sudo tun-proxy service logs` 查看托管服务的 stdout/stderr 日志。
+启动前，命令会安全读取并校验调用者的 `~/.config/tun-proxy/config.yaml`，然后将其原子同步到
+托管配置。服务原本正在运行时，同步会执行一次完整重启并等待就绪；服务原本已停止时，同步后再
+启动服务。整个启动流程最长等待 20 秒。
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `-use-last-config` | `false` | 用户配置校验、同步或启动失败时，校验并继续使用上一次成功同步的托管配置。 |
+
+默认情况下，用户配置校验、同步或服务启动失败都会输出警告并退出，并提示运行
+`sudo tun-proxy service logs` 查看托管服务的 stdout/stderr 日志。使用 `-use-last-config` 时，
+只有在托管配置本身可读取且有效、并且能够启动时，命令才会继续成功。
 
 ### `service stop`
 
@@ -372,24 +382,6 @@ sudo tun-proxy service restart
 ```
 
 先干净停止服务，再启动并检查是否就绪。该命令没有参数。
-
-### `service sync-user-config`
-
-```sh
-sudo tun-proxy service sync-user-config
-```
-
-根据 `SUDO_USER` 选择调用者的 `~/.config/tun-proxy/config.yaml`，完成安全读取、YAML 与字段
-约束校验后，原子替换 `/Library/Application Support/tun-proxy/config.yaml`。该命令没有参数。
-
-- 服务未运行：禁用并卸载仍注册的 launchd job，原子同步配置并保持停止；随后可执行
-  `sudo tun-proxy service start`。
-- 服务正在运行：先干净停止服务，再同步配置、重新启动并等待就绪。新配置启动失败时会回滚
-  托管配置，并尝试重新启动旧配置。
-
-该命令适用于 TUN、监听地址、地址池、容量和 default-route 拓扑等需要完整重启的修改，也可用于
-修复导致服务无法启动的错误网口。操作失败时，错误信息会提示运行
-`sudo tun-proxy service logs` 查看托管服务日志。
 
 ### `service reload`
 
@@ -419,8 +411,8 @@ status reload counters 仅用于观测，不再用于关联当前 CLI 请求。c
 安全重试并恢复缓存结果。运行时拒绝、确认超时或摘要不一致时，CLI 恢复旧托管配置，重新计算旧
 配置摘要，并使用新的 request ID、相同 operation ID 和 `rollback_of` 通过同一 control socket
 确认运行时恢复。`SIGHUP` 仅保留为会自动生成关联 ID 的手工兼容入口。
-服务未运行或尚未进入 `running` 阶段时不会复制配置；同步完整用户配置应使用
-`service sync-user-config`。
+服务未运行或尚未进入 `running` 阶段时不会复制配置；同步并启动完整用户配置应使用
+`service start`。
 
 服务必须已经安装。操作失败时，错误信息会提示运行 `sudo tun-proxy service logs` 查看托管服务日志。
 

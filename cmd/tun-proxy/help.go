@@ -32,6 +32,8 @@ func commandFlagSet(topic string, output io.Writer) (*flag.FlagSet, bool) {
 		return newCleanupFlagSet(output, nil), true
 	case "service install":
 		return newServiceInstallFlagSet(output, nil), true
+	case "service start":
+		return newServiceStartFlagSet(output, nil), true
 	case "service reload":
 		return newServiceReloadFlagSet(output, nil), true
 	case "service status":
@@ -154,10 +156,9 @@ not through sudo; the updater requests privilege only for files that require it.
 
 commands:
   install [options]     install the managed LaunchDaemon
-  start                 start the installed service
+  start [options]       sync user config and start the installed service
   stop                  stop the service cleanly
   restart               stop and start the service
-  sync-user-config      install user config; restart only if already running
   reload [options]      atomically reload mutable configuration
   status [-json]        show launchd and runtime status
   logs [options]        read or follow managed stdout/stderr logs
@@ -170,10 +171,16 @@ Run "tun-proxy help service <command>" for details.
 
 {{generated-options}}
 `,
-	"service start": `usage: tun-proxy service start
+	"service start": `usage: tun-proxy service start [options]
 
-Starts the installed service and waits up to 20 seconds for runtime readiness.
-On failure, run "sudo tun-proxy service logs" to inspect managed stdout/stderr.
+{{generated-options}}
+
+Validates and synchronizes the invoking user's default configuration before
+starting the installed service, then waits up to 20 seconds for runtime
+readiness. If validation or synchronization fails, startup is aborted. Use
+-use-last-config to continue with the last successfully synchronized managed
+configuration. On failure, run "sudo tun-proxy service logs" to inspect managed
+stdout/stderr.
 `,
 	"service stop": `usage: tun-proxy service stop
 
@@ -183,15 +190,6 @@ its job so KeepAlive cannot start it again. The installed files are preserved;
 "sudo tun-proxy service logs" to inspect managed stdout/stderr.
 `,
 	"service restart": "usage: tun-proxy service restart\n",
-	"service sync-user-config": `usage: tun-proxy service sync-user-config
-
-Validates the invoking user's ~/.config/tun-proxy/config.yaml and atomically
-copies it to the managed service configuration. If the service is running, it
-is restarted and checked for readiness; startup failure rolls the managed
-configuration back and attempts to restore the previous service. If the
-service is stopped, it remains stopped. On failure, inspect managed logs with:
-  sudo tun-proxy service logs
-`,
 	"service reload": `usage: tun-proxy service reload [options]
 
 {{generated-options}}
@@ -200,9 +198,9 @@ Without -config or -user-config, the running service re-reads the installed
 configuration. -user-config selects the invoking user's
 ~/.config/tun-proxy/config.yaml; -config selects an explicit path. For a running
 service, the source is transactionally applied with rollback when runtime
-acknowledgement fails. Reload requires a running service; use
-"sudo tun-proxy service sync-user-config" to synchronize the user configuration
-while preserving stopped/running state. On failure, inspect managed logs with:
+acknowledgement fails. Reload requires a running service. To validate, synchronize, and start the
+user configuration, use "sudo tun-proxy service start". On failure, inspect
+managed logs with:
   sudo tun-proxy service logs
 `,
 	"service status": `usage: tun-proxy service status [options]
